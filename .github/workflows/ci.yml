@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  model:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi gcc-riscv64-unknown-elf
+      - uses: astral-sh/setup-uv@v5
+      - run: make setup
+      - run: make test
+        env:
+          THUMBV_REQUIRE_TOOLS: "1"
