@@ -194,7 +194,7 @@ ARMv6-M leaves some encodings UNPREDICTABLE, e.g. `ADD PC, PC`, `BLX PC`, a high
 
 | # | Question | Notes |
 |---|---|---|
-| Q1 | Must `BL`/`BLX` set bit 0 of LR? | With address-based mode, bit 0 is never needed to return correctly, and leaving it clear makes `BL` a single `jal`. Code that inspects LR (rare) would see a difference, and the lockstep harness would have to mask bit 0. |
+| Q1 | Must `BL`/`BLX` set bit 0 of LR? | `BL` and `BLX` are function calls (Branch with Link, and Branch with Link and Exchange): they write the return address to LR. On ARM, bit 0 of a code address selects Thumb, so a Cortex-M stores `return | 1`. With address-based mode, bit 0 is never needed to return correctly, and leaving it clear makes `BL` a single `jal`. Code that inspects LR (rare) would see a difference, and the lockstep harness would have to mask bit 0. |
 | Q2 | Can the core produce a PC+2 link value for `BLX rm`? | VexRiscv computes the link as `pc + (isRvc ? 2 : 4)`. If the expander marks 16-bit Thumb ops as RVC-like, `BLX rm` is one `jalr`. Confirm in Phase 1.3. |
 | Q3 | Are register shifts common enough to need a better expansion? | 5 ops each. Options: Zbb's `minu`, or a custom shift micro-op with ARM semantics. Decide from 0.7. |
 | Q4 | Add Zbb to the core? | Reduces extends, `REV*`, `RORS` and `BICS` to 1–2 ops. Check whether VexRiscv has a bit-manipulation plugin, and its LE cost. |
