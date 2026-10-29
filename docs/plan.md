@@ -157,7 +157,7 @@ Goal: a software implementation of Thumb-V that runs real Thumb code correctly, 
 - Tools: `arm-none-eabi-gcc` (`-mcpu=cortex-m0 -mthumb`), `riscv32`/`riscv64-unknown-elf-gcc`, Python 3 with `unicorn` and `capstone`, Verilator, and later cocotb.
 
 **0.2 ISA coverage document: `docs/isa-coverage.md`**
-- One row per ARMv6-M encoding (~80 rows, from the ARMv6-M Architecture Reference Manual).
+- One row per ARMv6-M encoding (83 rows, from the ARMv6-M Architecture Reference Manual). Done; open questions Q1–Q7 there feed into 0.3 and Phase 1.3.
 - Columns: encoding, semantics, flags read and written, RV32 expansion (op count), special cases (PC, SP, rd = rn …), behaviour in mixed vs ARM-only mode, status (modelled / RTL / verified).
 
 **0.3 Expansion model: `model/expander.py`**
