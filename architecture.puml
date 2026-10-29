@@ -1,0 +1,34 @@
+@startuml architecture
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName sans-serif
+skinparam ArrowColor #5F5E5A
+
+skinparam rectangle {
+  BackgroundColor<<stock>> #F1EFE8
+  BorderColor<<stock>> #5F5E5A
+  BackgroundColor<<new>> #EEEDFE
+  BorderColor<<new>> #534AB7
+}
+
+rectangle "Instruction fetch\n<size:11>mode chosen by address</size>" as fetch <<stock>>
+rectangle "Thumb region CSRs\n<size:11>programmable address ranges</size>" as regions <<new>>
+rectangle "Existing RVC / RV32 path\n<size:11>native code, firmware, trap handlers</size>" as rv <<stock>>
+rectangle "Thumb expander\n<size:11>cracks Thumb into RV32 ops</size>" as thumb <<new>>
+rectangle "Stock decode + execute\n<size:11>small PC-hold / IRQ patch</size>" as exec <<stock>>
+rectangle "NZCV flags unit\n<size:11>if chosen (decision D1)</size>" as flags <<new>> #line.dashed
+rectangle "Unified interrupt controller\n<size:11>NVIC programming model, shared timer</size>" as irq <<new>>
+
+regions -right-> fetch
+fetch --> rv : RISC-V address
+fetch --> thumb : Thumb region
+rv --> exec
+thumb --> exec
+exec -right-> flags
+irq -left-> exec : external interrupt
+
+legend bottom
+  |<#F1EFE8> | Off-the-shelf core |
+  |<#EEEDFE> | What you add |
+endlegend
+@enduml
