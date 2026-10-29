@@ -160,15 +160,17 @@ Goal: a software implementation of Thumb-V that runs real Thumb code correctly, 
 - One row per ARMv6-M encoding (83 rows, from the ARMv6-M Architecture Reference Manual). Done; open questions Q1–Q7 there feed into 0.3 and Phase 1.3.
 - Columns: encoding, semantics, flags read and written, RV32 expansion (op count), special cases (PC, SP, rd = rn …), behaviour in mixed vs ARM-only mode, status (modelled / RTL / verified).
 
-**0.3 Expansion model: `model/expander.py`**
-- Pure function: `expand(halfwords, pc) -> [rv32_word, ...]`, plus per-op metadata (last-of-sequence, PC advance).
-- Emits real RV32 machine code, not an IR, so RTL comparison is bit-exact.
-- Implements flags strategy A first. B and C can be added as switchable variants for measurement.
-- Any non-standard micro-ops (e.g. a link-with-bit-0 `jal`, branch-on-NZCV) get encodings in the `custom-0`/`custom-1` opcode space and are documented in `docs/microops.md`.
+**0.3 Expansion model: `model/thumbv/expander.py`** (done)
+- Pure function: `expand(hw1, hw2, pc, options) -> Expansion(ops, length)`. The last op is the last of the sequence; `length` is the PC advance.
+- Emits real RV32 machine code, not an IR, so RTL comparison is bit-exact. The encoders in `rv32.py` are checked against the GNU assembler.
+- All 83 encodings, with flags strategy A (each flag as 0/1 in its own register). B and C can be added as switchable variants for measurement.
+- Uses no custom micro-ops so far. Any that are added later (e.g. branch-on-NZCV for strategy C, the ARM-shift op from Q3) get encodings in the `custom-0`/`custom-1` opcode space and are documented in `docs/microops.md`.
+- Expansion rules and measured op counts are in `docs/isa-coverage.md`.
 
-**0.4 Executor and lockstep harness: `model/`**
-- A minimal RV32IM(+custom ops) interpreter that runs native RISC-V code directly and Thumb code through the expander, choosing by the fetch address against the programmable regions. Every op in a Thumb sequence executes with `pc` = the Thumb address.
-- Thumb-only lockstep: load an ELF into the model and into Unicorn (`UC_ARCH_ARM`, `UC_MODE_THUMB | UC_MODE_MCLASS`), step one Thumb instruction in each and compare r0–r15 and NZCV. Report the first divergence with disassembly.
+**0.4 Executor and lockstep harness: `model/thumbv/machine.py`** (executor and single-instruction lockstep done)
+- Done: a minimal RV32IM interpreter that runs native RISC-V code directly and Thumb code through the expander, choosing by the fetch address against the programmable regions. Every op in a Thumb sequence executes with `pc` = the Thumb address.
+- Done: single-instruction lockstep (`tests/test_lockstep_single.py`). 300 random instances of each encoding run in Unicorn and in the model, comparing registers, flags, next PC, RAM and PRIMASK.
+- Thumb-only program lockstep: load an ELF into the model and into Unicorn (`UC_ARCH_ARM`, `UC_MODE_THUMB | UC_MODE_MCLASS`), step one Thumb instruction in each and compare r0–r15 and NZCV. Report the first divergence with disassembly.
 - Mixed lockstep: Unicorn can't run RISC-V and Thumb together, so for each RISC-V→Thumb call, run the same Thumb function in Unicorn with the same arguments and memory and compare return values and memory afterwards.
 
 **0.5 Test corpus: `tests/`**
@@ -265,6 +267,8 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 ## Immediate next actions
 
-1. Create the repo layout and install the toolchains (0.1).
-2. Write `docs/isa-coverage.md` (0.2), the backbone for everything after it.
-3. Start `model/expander.py` with load/store and branch encodings, the executor and the Unicorn lockstep harness, so there is an end-to-end loop as early as possible.
+Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), and the executor and single-instruction lockstep from 0.4.
+
+1. Program-level lockstep (rest of 0.4): run whole Thumb ELF programs in the model and Unicorn, comparing state after every instruction.
+2. Test corpus (0.5): directed tests, random instruction sequences, CoreMark. Needs picolibc for RISC-V once C programs are involved.
+3. Interworking prototype (0.6) and measurements (0.7).

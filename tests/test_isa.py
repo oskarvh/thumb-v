@@ -108,8 +108,11 @@ def _doc_patterns() -> list[str]:
             continue
         first_cell = line.split(" | ")[0]
         spans = re.findall(r"`([^`]*)`", first_cell)
-        if spans and all(re.fullmatch(r"[01a-zA-Z ]+", s) for s in spans):
-            patterns.append("".join(s.replace(" ", "") for s in spans))
+        bits = "".join(s.replace(" ", "") for s in spans)
+        # Encoding patterns have fixed bits and are 16 or 32 bits long; other
+        # tables (e.g. instruction names in code spans) don't.
+        if all(re.fullmatch(r"[01a-zA-Z ]*[01][01a-zA-Z ]*", s) for s in spans) and len(bits) in (16, 32):
+            patterns.append(bits)
     return patterns
 
 
