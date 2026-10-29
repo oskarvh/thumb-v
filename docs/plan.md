@@ -182,7 +182,7 @@ Goal: a software implementation of Thumb-V that runs real Thumb code correctly, 
 - A first thunk generator, `tools/thunkgen`, driven by C prototypes, exercised by the interworking tests in the model.
 
 **0.7 Measurement**
-- Dynamic expansion ratio (RV ops retired per Thumb instruction retired) for CoreMark/Embench under strategies A, B and C. Also: how often flags are dead, how often `CMP`+`B<cond>` is fusable, and how often `BL` exceeds ±1 MiB.
+- Dynamic expansion ratio (RV ops retired per Thumb instruction retired) for CoreMark/Embench under strategies A, B and C. Also: how often flags are dead, how often `CMP`+`B<cond>` is fusable, how often `BL` exceeds ±1 MiB, and how often register shifts run, split into integer and soft-float code (Q3).
 - Write the results and the D1 decision into `docs/flags-decision.md`.
 
 **Exit criteria:** every ARMv6-M instruction is modelled; directed and random tests pass lockstep against Unicorn; CoreMark built for Cortex-M0 completes with the correct CRC; a RISC-V program calls Thumb library functions (and is called back) correctly in the model; D1 and D8 are decided.
@@ -204,7 +204,7 @@ Goal: an unmodified RISC-V core running in Verilator and on the CYC1000, and a p
 - How external interrupts reach the core (single line, or VexRiscv's interrupt-array plugin) and what hardware vectoring would take.
 - Settle D4 and D5 from this.
 
-**1.4 Board bring-up.** Quartus Prime Lite project for the 10CL025, programmed with `openFPGALoader` (which supports the CYC1000's on-board Arrow USB Blaster). LED blinky plus UART hello from the same binary as in simulation. Record a resource and Fmax baseline (LEs, M9Ks, MHz) in `docs/resources.md`.
+**1.4 Board bring-up.** Quartus Prime Lite project for the 10CL025, programmed with `openFPGALoader` (which supports the CYC1000's on-board Arrow USB Blaster). LED blinky plus UART hello from the same binary as in simulation. Record a resource and Fmax baseline (LEs, M9Ks, MHz) in `docs/resources.md`. If 0.7 shows register shifts are frequent, also synthesise the ARM-shift micro-op variant of the shifter and record its LE and Fmax cost (Q3).
 
 **Exit criteria:** the same RISC-V binary runs in Verilator and on the board; the patch points are documented; LE/Fmax baseline recorded.
 

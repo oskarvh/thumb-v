@@ -186,6 +186,53 @@ Conditional branches with this representation:
 | HI, LS (C and Z) | 2–3 |
 | GT, LE (Z and N = V) | 3 |
 
+## Register shifts
+
+`LSLS`, `LSRS`, `ASRS` and `RORS` with a register amount (`rdn, rm`) differ from RISC-V's `sll`/`srl`/`sra`. ARM uses the low byte of `rm` as the amount (0–255); RISC-V uses only the low 5 bits (0–31).
+
+| Amount (rm[7:0]) | ARM `LSLS`/`LSRS` | ARM `ASRS` | ARM `RORS` | RISC-V |
+|---|---|---|---|---|
+| 0 | unchanged, C unchanged | unchanged, C unchanged | unchanged, C unchanged | unchanged |
+| 1–31 | normal shift | normal shift | normal rotate | same as ARM |
+| 32 | 0 (C = bit 0 or bit 31 of rdn) | sign fill (C = sign) | unchanged (C = bit 31) | shift by 0: wrong for shifts |
+| 33–255 | 0 (C = 0) | sign fill (C = sign) | rotate by amount mod 32 | shift by amount mod 32: wrong for shifts |
+
+Amounts of 32 and more can't be ignored. C code rarely produces them (shifting by ≥ 32 is undefined behaviour in C), but ARM's hand-written runtime relies on them: libgcc's 64-bit shifts (`__aeabi_llsl` and friends) shift by `n − 32` and count on a "negative" amount giving 0.
+
+**Current plan: plain RV32I, 5 ops for the result.** For `LSLS rdn, rm`:
+
+```
+andi  t, rm, 255      # ARM's amount: low byte
+sll   u, rdn, t       # RISC-V shift (uses t mod 32)
+sltiu t, t, 32        # 1 if amount < 32, else 0
+sub   t, x0, t        # all ones or all zeros
+and   rdn, u, t       # zero the result if amount >= 32
+```
+
+Under strategy A the C flag adds roughly 5 more ops (amounts of 0, 32 and > 32 are special cases).
+
+### Alternative: an ARM-shift micro-op
+
+A custom instruction in the `custom-0` opcode space with ARM semantics: amount from rs2[7:0], result forced to 0 (or to the sign fill for `ASRS`) when any of amount bits 7:5 are set. Only the expander emits it; RISC-V software never sees it.
+
+| Option | Result ops | Notes |
+|---|---|---|
+| Plain RV32I | 5 | No core change. **Current choice.** |
+| Zbb `minu` | 3 for `ASRS`, ~5 for `LSLS`/`LSRS` | Only worth it if Zbb is added for other reasons (Q4) |
+| Zbb + Zicond `czero.eqz` | ~4 | Two extensions for a small gain |
+| ARM-shift micro-op | 1 | Core change in the shifter. With the hardware flags unit (D1 option C), the shifter would also supply C, making it 1 op including flags |
+
+The micro-op is only worth doing if both of these come out in its favour:
+
+1. **Dynamic frequency (Phase 0.7).** Count register shifts per benchmark, with integer and soft-float code separately. The Cortex-M0 has no FPU, so floating-point code runs libgcc's soft-float routines, which use variable shifts heavily for normalisation; 64-bit integer shifts also go through libgcc. Embench's float-heavy programs (`nbody`, `minver`, `cubic`, `st`) are the likely worst case. From the counts, estimate the overall slowdown of the 5-op expansion.
+2. **Hardware cost (Phase 1, once VexRiscv's shifter is known).** The logic is small (an OR of three bits and a mux after the shifter), but it needs measuring:
+   - **LEs:** synthesise VexRiscv's shifter with and without the change, and record the difference in `docs/resources.md`.
+   - **Fmax:** the extra mux sits after the shifter, which may be on the critical path. Compare timing reports with and without.
+   - **Decode:** whether VexRiscv's plugin structure lets a custom opcode reuse the existing shifter cleanly, or needs a separate unit.
+   - **Verification:** another op the exhaustive expander test and the lockstep tests must cover.
+
+Unless the measured slowdown is significant and the hardware cost is clearly small, the 5-op expansion stays.
+
 ## UNPREDICTABLE encodings
 
 ARMv6-M leaves some encodings UNPREDICTABLE, e.g. `ADD PC, PC`, `BLX PC`, a high-register `CMP` with two low registers, or empty register lists. Thumb-V does whatever is cheapest in the expander and documents it here once modelled. The lockstep tests don't generate them, since Unicorn's behaviour for them isn't a meaningful reference.
@@ -196,7 +243,7 @@ ARMv6-M leaves some encodings UNPREDICTABLE, e.g. `ADD PC, PC`, `BLX PC`, a high
 |---|---|---|
 | Q1 | Must `BL`/`BLX` set bit 0 of LR? | **Decided: no.** `BL` and `BLX` are function calls (Branch with Link, and Branch with Link and Exchange): they write the return address to LR. On ARM, bit 0 of a code address selects Thumb, so a Cortex-M stores `return \| 1`. With address-based mode, bit 0 is never needed to return correctly, and leaving it clear makes `BL` a single `jal`. Only code that inspects LR's value sees a difference. The model keeps an `exact_lr` option (off by default) that sets bit 0, used by the lockstep tests to compare exactly against Unicorn; switching later means making it the default. |
 | Q2 | Can the core produce a PC+2 link value for `BLX rm`? | The model's rule: a link value is the Thumb instruction's address plus its length (PC+2 for `BLX`, PC+4 for `BL`). VexRiscv computes the link as `pc + (isRvc ? 2 : 4)`, so marking 16-bit Thumb ops as RVC-like should give this for free. Confirm in Phase 1.3; doesn't block the model. |
-| Q3 | Are register shifts common enough to need a better expansion? | 5 ops each. Options: Zbb's `minu`, or a custom shift micro-op with ARM semantics. Decide from 0.7. |
+| Q3 | Are register shifts common enough to need a better expansion? | **Open, leaning towards the 5-op expansion.** The ARM-shift micro-op is documented under [Register shifts](#register-shifts), with what has to be measured first: dynamic frequency in 0.7, hardware cost (LEs, Fmax) in Phase 1. |
 | Q4 | Add Zbb to the core? | Reduces extends, `REV*`, `RORS` and `BICS` to 1–2 ops. Check whether VexRiscv has a bit-manipulation plugin, and its LE cost. |
 | Q5 | `WFE`: `nop` or `wfi`? | A `nop` is always correct for a single core with no event sources, at the cost of busy-waiting. |
 | Q6 | Is `mstatus.MIE` a faithful PRIMASK? | PRIMASK masks all configurable-priority interrupts but not NMI or HardFault. Fine for mixed mode; check for ARM-only mode. |
