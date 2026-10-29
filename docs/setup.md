@@ -1,6 +1,6 @@
 # Setup
 
-Instructions for Ubuntu 24.04. Run `make check-tools` to see what is installed.
+Instructions for Ubuntu 24.04. Run `make check-tools` to see what is installed. The full list of dependencies, with versions and licenses, is in [dependencies.md](dependencies.md).
 
 ## Phase 0: model and test programs
 

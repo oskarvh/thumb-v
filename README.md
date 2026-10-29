@@ -11,7 +11,7 @@ Two use cases share the same hardware:
 
 Both instruction sets share one register file, stack and address space, so there is no sandboxing between them.
 
-See [`architecture.puml`](architecture.puml) for the pipeline diagram and [`docs/plan.md`](docs/plan.md) for the plan and design decisions.
+See [`architecture.puml`](architecture.puml) for the pipeline diagram and [`docs/plan.md`](docs/plan.md) for the plan and design decisions. To get started, see [`docs/setup.md`](docs/setup.md); all dependencies are listed in [`docs/dependencies.md`](docs/dependencies.md).
 
 ## Architecture
 
