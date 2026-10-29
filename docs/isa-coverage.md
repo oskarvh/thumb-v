@@ -60,7 +60,7 @@ All of these are `010000 oooo mmm ddd` with a 4-bit opcode.
 | `01000101 N mmmm nnn` | `CMP rn, rm` (high registers) | W: NZCV | — | 0 | UNPREDICTABLE if both low or either is PC | planned |
 | `01000110 D mmmm ddd` | `MOV rd, rm` (rd = D:ddd) | — | `addi rd, rm, 0` | 1 | rm = PC: `auipc rd, 0; addi rd, rd, 4` (2). rd = PC: `jalr x0, 0(rm)` (1). GAS emits `MOV r8, r8` (0x46C0) for `NOP` on Cortex-M0 | planned |
 | `010001110 mmmm 000` | `BX rm` | — | `jalr x0, 0(rm)` | 1 | Thumb-V ignores bit 0 (a real Cortex-M faults on bit 0 = 0); the address decides the decoder. ARM-only: EXC_RETURN values fault on fetch and enter the firmware | planned |
-| `010001111 mmmm 000` | `BLX rm` | — | `jalr ra, 0(rm)` | 1–4 | LR = (PC+2)\|1. 1 op if the link is PC+2 and bit 0 may stay clear (Q1, Q2); otherwise `addi t, rm, 0; auipc ra, 0; addi ra, ra, 3; jalr x0, 0(t)` (4). rm = PC: UNPREDICTABLE | planned |
+| `010001111 mmmm 000` | `BLX rm` | — | `jalr ra, 0(rm)` | 1 | LR = PC+2, bit 0 clear (Q1). Needs a PC+2 link value from the core (Q2); fallback `addi t, rm, 0; auipc ra, 0; addi ra, ra, 2; jalr x0, 0(t)` (4). rm = PC: UNPREDICTABLE | planned |
 
 ## Loads and stores
 
@@ -139,7 +139,7 @@ The other `1011` encodings are ARMv7-M instructions (`CBZ`/`CBNZ`, `IT`) or unal
 
 | Encoding | Instruction | Flags | RV32 expansion | Ops | Notes | Status |
 |---|---|---|---|---|---|---|
-| `11110 s iiiiiiiiii`, `11 j 1 k iiiiiiiiiii` | `BL label` | — | `jal ra, off` | 1–4 | ±16 MiB. 1 op if within `jal`'s ±1 MiB and LR bit 0 may stay clear (Q1). Exact LR: `auipc ra, 0; addi ra, ra, 5; jal x0, off` (3). Beyond ±1 MiB: `auipc t, hi; jalr x0, lo(t)` in place of the `jal` (4) | planned |
+| `11110 s iiiiiiiiii`, `11 j 1 k iiiiiiiiiii` | `BL label` | — | `jal ra, off` | 1–2 | ±16 MiB. LR = PC+4, bit 0 clear (Q1). Beyond `jal`'s ±1 MiB: `auipc t, hi; jalr ra, lo(t)` (2). With `exact_lr`: `auipc ra, 0; addi ra, ra, 5` and a non-linking jump (3–4) | planned |
 | `111100111000 nnnn`, `10001000 ssssssss` | `MSR spec_reg, rn` | W: NZCV (APSR) | APSR: unpack into the flag representation. PRIMASK: update `mstatus.MIE`. Others: trap to the handler | varies | Q7 | planned |
 | `1111001111101111`, `1000 dddd ssssssss` | `MRS rd, spec_reg` | R: NZCV (APSR) | APSR: pack the flags into bits 31:28. PRIMASK: read `mstatus.MIE`. Others: trap to the handler | varies | Q7 | planned |
 | `1111001110111111`, `100011110100 oooo` | `DSB` | — | `fence` | 1 | | planned |
@@ -156,7 +156,7 @@ All other 32-bit encodings (first halfword `11101`, `11110` or `11111` not match
 |---|---|
 | 0 ops (only the flags are needed) | 5 (`CMP` ×3, `CMN`, `TST`) |
 | 1 op | 46 |
-| 1 op or more, depending on Q1/Q2 or the flag strategy | 3 (`BL`, `BLX`, `B<cond>`) |
+| 1 op or more, depending on branch range, Q2 or the flag strategy | 3 (`BL`, `BLX`, `B<cond>`) |
 | 2 or more ops | 29 (register-offset loads and stores, register shifts, `PUSH`/`POP`/`LDM`/`STM`, byte reversal, extends, `ADCS`/`SBCS`, `BICS`, `ADR`, `LDR [PC]`, `MSR`/`MRS`) |
 
 This is a static count. What matters for performance is the dynamic mix, which Phase 0.7 measures on CoreMark and Embench.
@@ -194,8 +194,8 @@ ARMv6-M leaves some encodings UNPREDICTABLE, e.g. `ADD PC, PC`, `BLX PC`, a high
 
 | # | Question | Notes |
 |---|---|---|
-| Q1 | Must `BL`/`BLX` set bit 0 of LR? | `BL` and `BLX` are function calls (Branch with Link, and Branch with Link and Exchange): they write the return address to LR. On ARM, bit 0 of a code address selects Thumb, so a Cortex-M stores `return | 1`. With address-based mode, bit 0 is never needed to return correctly, and leaving it clear makes `BL` a single `jal`. Code that inspects LR (rare) would see a difference, and the lockstep harness would have to mask bit 0. |
-| Q2 | Can the core produce a PC+2 link value for `BLX rm`? | VexRiscv computes the link as `pc + (isRvc ? 2 : 4)`. If the expander marks 16-bit Thumb ops as RVC-like, `BLX rm` is one `jalr`. Confirm in Phase 1.3. |
+| Q1 | Must `BL`/`BLX` set bit 0 of LR? | **Decided: no.** `BL` and `BLX` are function calls (Branch with Link, and Branch with Link and Exchange): they write the return address to LR. On ARM, bit 0 of a code address selects Thumb, so a Cortex-M stores `return \| 1`. With address-based mode, bit 0 is never needed to return correctly, and leaving it clear makes `BL` a single `jal`. Only code that inspects LR's value sees a difference. The model keeps an `exact_lr` option (off by default) that sets bit 0, used by the lockstep tests to compare exactly against Unicorn; switching later means making it the default. |
+| Q2 | Can the core produce a PC+2 link value for `BLX rm`? | The model's rule: a link value is the Thumb instruction's address plus its length (PC+2 for `BLX`, PC+4 for `BL`). VexRiscv computes the link as `pc + (isRvc ? 2 : 4)`, so marking 16-bit Thumb ops as RVC-like should give this for free. Confirm in Phase 1.3; doesn't block the model. |
 | Q3 | Are register shifts common enough to need a better expansion? | 5 ops each. Options: Zbb's `minu`, or a custom shift micro-op with ARM semantics. Decide from 0.7. |
 | Q4 | Add Zbb to the core? | Reduces extends, `REV*`, `RORS` and `BICS` to 1–2 ops. Check whether VexRiscv has a bit-manipulation plugin, and its LE cost. |
 | Q5 | `WFE`: `nop` or `wfi`? | A `nop` is always correct for a single core with no event sources, at the cost of busy-waiting. |

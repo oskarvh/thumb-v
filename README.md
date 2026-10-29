@@ -63,7 +63,8 @@ Calls whose signatures differ between the ABIs (more than 4 arguments, 64-bit ar
 | `MULS` | 1 + flags |
 | `BX rm` | 1 (`jalr x0, 0(rm)`; `jalr` already clears bit 0) |
 | `CMP` + `B<cond>` | 1 when fused (`beq`/`blt`/`bltu`/…), plus whatever keeps NZCV recoverable |
-| `BL` | 2–3 (LR gets bit 0 set; `auipc` + `jalr` beyond `jal`'s ±1 MiB) |
+| `BL` | 1 (`jal ra`; LR bit 0 is left clear), 2 beyond `jal`'s ±1 MiB (`auipc` + `jalr`) |
+| `BLX rm` | 1 (`jalr ra, 0(rm)` with a PC+2 link) |
 | `CPSID`/`CPSIE`, `WFI`, `SVC`, `BKPT` | 1 (`csrci`/`csrsi`, `wfi`, `ecall`, `ebreak`) |
 | `UXTB/UXTH`, `SXTB/SXTH` | 1–2 (1 with Zbb) |
 | `REV`, `RORS` | 4–8 (1 with Zbb) |
