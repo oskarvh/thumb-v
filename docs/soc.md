@@ -1,0 +1,62 @@
+# The SoC and its simulation
+
+A minimal hand-written SoC around the core (decision D6): on-chip RAM, a UART transmitter and the board's LEDs. The SoC is plain Verilog in `rtl/soc/`; it runs in Verilator now, and on the CYC1000 in Phase 1.4.
+
+## Memory map
+
+The map matches the software model's layout ([build.py](../model/thumbv/build.py)), so the same ELF files run in the model and on the RTL.
+
+| Address | Size | What |
+|---|---|---|
+| `0x0000_0000` | 256 KiB | Code RAM: instructions and read-only data. Also readable and writable as data, for literal pools and `.rodata`. Thumb code links at `0x1_0000`, RISC-V code at `0x2_0000`, which is also the reset vector. |
+| `0x1000_0000` | | UART data: writing sends the low byte |
+| `0x1000_0004` | | UART status: bit 0 = busy |
+| `0x1000_0008` | | LEDs: bits 7:0, read/write |
+| `0x2000_0000` | 64 KiB | Data RAM. The stack starts at the top (`0x2001_0000`). |
+
+Access faults:
+- An instruction fetch outside the code RAM faults.
+- A load from an unmapped address faults.
+- A store to an unmapped address is dropped.
+
+The 256 KiB code RAM fits in simulation only: the 10CL025 has about 66 KB of block RAM in all. The board build in Phase 1.4 will use smaller RAMs, with its own link scripts.
+
+`tests/c/soc.h` defines the registers for C programs (`soc_putc`, `soc_puts`, `LEDS`).
+
+## Modules
+
+| File | What |
+|---|---|
+| `rtl/soc/thumbv_soc.v` | Top level: the core, the address decode and the response mux. Both buses accept a command every cycle, and the response comes one cycle later. |
+| `rtl/soc/thumbv_ram.v` | Dual-port RAM with synchronous reads and byte enables, written so that Quartus infers M9K blocks. The code RAM uses both ports (fetch and data); the data RAM uses one. |
+| `rtl/soc/thumbv_uart_tx.v` | 8N1 UART transmitter. `CLKS_PER_BIT` sets the baud rate: 104 for 115200 baud at 12 MHz (the CYC1000's clock), and 4 in simulation so programs run fast. |
+
+## Testbench
+
+`sim/tb.sv` is a SystemVerilog testbench, built with `verilator --binary --timing`, so it needs no C++.
+- **Loading:** it loads the RAMs from `$readmemh` files.
+- **UART:** it decodes the UART line back into characters and prints them.
+- **Trace:** it logs every retired instruction from the core's RVFI port (VexRiscv's `FormalPlugin`).
+- **Stopping:** the run ends when the core retires `j .`, the loop the startup code spins in at `done`. The testbench waits for the UART to finish its last byte, then prints `EXIT <a0> <cycles> <instructions>`. If the cycle limit is reached first, it prints `TIMEOUT`.
+
+## Lockstep against the model
+
+`model/thumbv/rtlsim.py` builds the testbench when its sources change, converts ELF files into memory images, runs them, and replays the trace against the model. For every retired instruction, the model must have:
+- the same PC and instruction word;
+- the same destination register and value, and no other register write;
+- the same bytes stored.
+
+Loads from the I/O registers are inputs from outside the core, so the model is given whatever value the RTL read. The UART's busy bit depends on timing that the model doesn't simulate.
+
+```sh
+uv run python -m thumbv.rtlsim build/hello.elf
+# Hello from Thumb-V
+# EXIT: a0 = 0xa5, 365 instructions in 870 cycles (CPI 2.38)
+# lockstep: 365 instructions match the model
+```
+
+`tests/test_rtl.py` runs hello world and the all-RISC-V builds of the interworking test programs. Each must give the model's result and match it instruction by instruction. A mutant trace checks that the lockstep catches a wrong register write.
+
+Limits for now:
+- **No trap handling.** The model doesn't model taking a trap: it stops with `Trap`. So the lockstep covers programs that don't trap. Trap handling comes with the trap entry routine (Phase 5).
+- **RISC-V code only.** Thumb code needs the expander in the RTL (Phase 2). The model side is ready: the same lockstep will then check Thumb instructions, with each one retiring as several RV32 ops.

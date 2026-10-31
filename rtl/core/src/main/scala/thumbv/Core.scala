@@ -16,6 +16,9 @@ import vexriscv.{VexRiscv, VexRiscvConfig, plugin}
   *    unhandled MRS/MSR, and the trap handler emulates them.
   *  - mstatus.MIE is PRIMASK (CPSID/CPSIE), so mstatus, mtvec, mepc, mcause
   *    and mtval are all accessible.
+  *  - An RVFI retire trace port (FormalPlugin), which the simulation
+  *    testbench logs to lockstep the core against the model. Synthesis
+  *    prunes it when it isn't connected.
   */
 object Core {
   def plugins(resetVector: BigInt, mtvec: BigInt) = List(
@@ -80,10 +83,13 @@ object Core {
       earlyBranch = false,
       catchAddressMisaligned = true,
       fenceiGenAsAJump = true           // no instruction cache: fence.i (ISB) just refetches
-    )
+    ),
+    new FormalPlugin
   )
 
-  def apply(resetVector: BigInt = 0x00000000L, mtvec: BigInt = 0x00000020L) =
+  // The reset vector is where tests/link/rv32.ld puts _start; mtvec is a
+  // placeholder until there is a trap handler (programs may set their own).
+  def apply(resetVector: BigInt = 0x00020000L, mtvec: BigInt = 0x00000020L) =
     new VexRiscv(VexRiscvConfig(plugins = plugins(resetVector, mtvec)))
 }
 

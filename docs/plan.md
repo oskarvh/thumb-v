@@ -213,7 +213,9 @@ Goal: an unmodified RISC-V core running in Verilator and on the CYC1000, and a p
 - VexRiscv pinned at `baf7dc82` (SpinalHDL 1.13.0). The configuration is `rtl/core/` ([core.md](core.md)): RV32IMC, machine mode, no MMU or caches, simple buses, traps for illegal instructions, misaligned accesses and `ecall`/`ebreak` like the model.
 - `make core` generates `build/rtl/VexRiscv.v` and lints it with Verilator; CI runs it.
 
-**1.2 Simulation SoC.** A Verilator testbench with on-chip RAM, a UART model and a RISC-V hello world. Add an instruction-retire trace port (VexRiscv's RVFI-style/formal hooks) so later phases can lockstep against the model.
+**1.2 Simulation SoC.** (done) A Verilator testbench with on-chip RAM, a UART model and a RISC-V hello world. Add an instruction-retire trace port (VexRiscv's RVFI-style/formal hooks) so later phases can lockstep against the model.
+- `rtl/soc/` ([soc.md](soc.md)): code RAM at 0, data RAM at `0x2000_0000`, a UART transmitter and LEDs, with the model's memory map so the same ELF files run on both. `sim/tb.sv` is an all-SystemVerilog testbench (`verilator --binary --timing`) that decodes the UART line and logs the RVFI trace.
+- `thumbv.rtlsim` replays the trace against the model: PC, instruction, register write and stored bytes for every retired instruction. Hello world and the all-RISC-V builds of the interworking programs match the model (CPI 1.4–1.7 without the UART polling). `make test-rtl`, also in CI.
 
 **1.3 Code-reading spike → `docs/vexriscv-notes.md`.** Find and document:
 - The RVC decompressor and halfword aligner (`IBusFetcherImpl` / `RvcDecompressor`), and how the instruction length is decided.
@@ -287,6 +289,6 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-Phase 0 is closed. Done: 1.1 (core generated).
+Phase 0 is closed. Done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep).
 
-1. Phase 1.2: simulation SoC in Verilator (on-chip RAM, UART model, retire trace port) and a RISC-V hello world.
+1. Phase 1.3: the code-reading spike: where the expander, PC-hold, interrupt gating and the NZCV CSR go in VexRiscv ([vexriscv-notes.md](vexriscv-notes.md)); settle D4 and D5.

@@ -29,6 +29,7 @@ Tests skip when a cross toolchain is missing. Set `THUMBV_REQUIRE_TOOLS=1` to ma
 | `make test-slow` | Also run the slow tests: CoreMark and Embench in lockstep, 500 more random programs (about 5 min) |
 | `make measure` | Cost the flags strategies over all benchmarks and print the table in [flags-decision.md](flags-decision.md) (about 20 s) |
 | `make core` | Generate the VexRiscv core into `build/rtl/` and lint it (Phase 1, needs sbt and Verilator) |
+| `make test-rtl` | Run programs on the SoC in Verilator, in lockstep with the model ([soc.md](soc.md)); fails instead of skipping if a tool is missing |
 | `make clean` | Remove `build/` and Python caches |
 
 ### Running tests selectively
@@ -56,6 +57,7 @@ THUMBV_REQUIRE_TOOLS=1 make test      # fail instead of skip when a toolchain is
 | `test_benchmarks.py` | CoreMark, Embench IoT and the soft-float kernels for Cortex-M0 |
 | `test_interwork.py` | Interface parsing, both ABIs' layouts, and generated thunks in a program built three ways |
 | `test_measure.py` | The 0.7 measurements: cost breakdown against the expander, flag liveness, lookahead safety |
+| `test_rtl.py` | RISC-V programs on the SoC in Verilator, in lockstep with the model (skipped without Verilator and sbt) |
 
 The build recipes for all of these are in `model/thumbv/build.py`, so scripts outside the tests can build the same programs.
 
@@ -139,6 +141,14 @@ make core
 ```
 
 `make core` generates the VexRiscv configuration in `rtl/core/` into `build/rtl/VexRiscv.v` and lints it with Verilator; any warning fails. The first run downloads Scala and SpinalHDL (about 30 s, more on a slow connection); later runs take a few seconds. See [core.md](core.md) for the configuration.
+
+To run a RISC-V program on the SoC in Verilator, in lockstep with the model (the testbench is rebuilt when its sources change):
+
+```sh
+uv run python -m thumbv.rtlsim build/pytest/<test>/hello.elf
+```
+
+See [soc.md](soc.md) for the memory map, the testbench and the lockstep.
 
 Later:
 - **Quartus Prime Lite** for the Cyclone 10 LP, from Intel's website.

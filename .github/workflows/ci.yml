@@ -33,8 +33,12 @@ jobs:
           java-version: "21"
           cache: sbt
       - uses: sbt/setup-sbt@v1
-      - name: Install Verilator
+      - name: Install Verilator and the RISC-V toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends verilator
-      - run: make core
+          sudo apt-get install -y --no-install-recommends verilator gcc-riscv64-unknown-elf
+      - uses: astral-sh/setup-uv@v5
+      - run: make setup
+      - run: make test-rtl
+        env:
+          THUMBV_REQUIRE_TOOLS: "1"

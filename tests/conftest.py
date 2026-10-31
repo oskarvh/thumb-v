@@ -11,6 +11,8 @@ ASM_DIR = Path(__file__).parent / "asm"
 # Missing cross toolchains skip the tests that need them, unless
 # THUMBV_REQUIRE_TOOLS=1 (set in CI), where they fail instead.
 REQUIRE_TOOLS = os.environ.get("THUMBV_REQUIRE_TOOLS") == "1"
+# Likewise for the RTL tools (sbt, Verilator), which CI installs in its own job.
+REQUIRE_RTL = os.environ.get("THUMBV_REQUIRE_RTL") == "1"
 
 
 def pytest_addoption(parser):
@@ -49,6 +51,18 @@ def _tools(fn):
             pytest.skip(f"{missing} not found")
 
     return wrapped
+
+
+@pytest.fixture(scope="session")
+def rtl_simulator():
+    """The Verilator testbench, built once per session (and the core generated if needed)."""
+    from thumbv import rtlsim
+    try:
+        return rtlsim.simulator()
+    except build.ToolMissing as missing:
+        if REQUIRE_RTL:
+            pytest.fail(f"{missing} not found")
+        pytest.skip(f"{missing} not found")
 
 
 @pytest.fixture

@@ -22,12 +22,14 @@ VexRiscv is built from plugins. The choices, and why:
 | `DivPlugin` | iterative, 1 bit per cycle | ARMv6-M has no divide; only RISC-V code uses it. |
 | `HazardSimplePlugin` | full bypassing | Expansions are long chains of dependent ops. |
 | `BranchPlugin` | branches resolved in execute, misaligned targets trapped, `fence.i` as a jump | With no I-cache, Thumb `ISB` (`fence.i`) only needs a refetch. |
+| `FormalPlugin` | RVFI retire trace | Lockstep against the model in simulation ([soc.md](soc.md)). |
 
-Reset vector `0x0000_0000` and trap vector `0x0000_0020` for now. Both are parameters of `Core()`; the simulation SoC (Phase 1.2) sets them from its memory map.
+Reset vector `0x0002_0000`, where `tests/link/rv32.ld` puts `_start` (see [soc.md](soc.md)). Trap vector `0x0000_0020` is a placeholder until there is a trap handler; programs can set `mtvec` themselves. Both are parameters of `Core()`.
+
+The core also has an RVFI retire trace port (`FormalPlugin`), which the simulation testbench logs to lockstep the core against the model. The SoC leaves it unconnected, so synthesis prunes it.
 
 Not included yet:
 - A debug module (JTAG). Useful for board bring-up in Phase 1.4.
-- The retire trace port (`FormalPlugin`'s RVFI), which Phase 1.2 adds for lockstep against the model.
 
 ## Interface
 
@@ -48,7 +50,9 @@ module VexRiscv (
   input         dBus_rsp_ready,   input  dBus_rsp_error,
   input  [31:0] dBus_rsp_data,
   // Interrupts (machine timer, external and software)
-  input         timerInterrupt, externalInterrupt, softwareInterrupt
+  input         timerInterrupt, externalInterrupt, softwareInterrupt,
+  // Retire trace: rvfi_valid, rvfi_pc_rdata, rvfi_insn, rvfi_rd_*, rvfi_mem_*, ...
+  output        rvfi_valid, ...
 );
 ```
 
