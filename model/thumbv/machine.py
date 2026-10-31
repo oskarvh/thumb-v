@@ -23,6 +23,7 @@ class Memory:
 
     def __init__(self):
         self._pages: dict[int, bytearray] = {}
+        self.log: list[tuple[int, int, int]] | None = None  # (addr, size, value) per store, if set
 
     def map(self, base: int, size: int):
         if base % PAGE or size % PAGE:
@@ -52,7 +53,10 @@ class Memory:
         return int.from_bytes(self.read_bytes(addr, n), "little")
 
     def write(self, addr: int, n: int, value: int):
-        self.write_bytes(addr, (value & ((1 << (8 * n)) - 1)).to_bytes(n, "little"))
+        value &= (1 << (8 * n)) - 1
+        self.write_bytes(addr, value.to_bytes(n, "little"))
+        if self.log is not None:
+            self.log.append((addr, n, value))
 
     def _page(self, addr, kind, base):
         page = self._pages.get((addr & MASK) // PAGE)

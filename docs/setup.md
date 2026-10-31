@@ -74,11 +74,34 @@ riscv64-unknown-elf-gcc -march=rv32im -mabi=ilp32 -nostdlib -Wl,-e,_start -Wl,-T
 riscv64-unknown-elf-objdump -d build/smoke_rv32.elf
 ```
 
+### Running a program in lockstep
+
+`python -m thumbv.lockstep` runs ELF images in the model and in the reference (Unicorn for Thumb code, a second RV32 executor for RISC-V code) and compares their state after every instruction. The first image's entry point is the start; the run stops at the symbol given with `--stop` (default `done`):
+
+```sh
+mkdir -p build
+uv run pytest tests/test_lockstep_programs.py --basetemp=build/pytest   # builds the test programs
+uv run python -m thumbv.lockstep build/pytest/test_thumb_selftest0/thumb_selftest.elf
+uv run python -m thumbv.lockstep build/pytest/test_mixed_program0/main_rv32.elf \
+    build/pytest/test_mixed_program0/lib_thumb.elf
+```
+
+It prints the number of steps, Thumb instructions and RV32 ops, and r0 at the end. On a divergence it prints the instruction, its expansion, what differs, and the preceding instructions.
+
 ### Adding a test program
 
-1. Put the assembly source in `tests/asm/`, with a global `_start` label. For Thumb, mark it `.thumb_func`.
-2. In a test, build it with the `build_asm` fixture from `tests/conftest.py`: `build_asm("thumb", "my_test.S")` or `build_asm("rv32", "my_test.S")`. It returns the path of the linked ELF (text at `0x1000` by default).
-3. Load it with `thumbv.elf.load(path)` to get its segments, entry point and symbols. See `tests/test_smoke.py` for an example that runs a program in Unicorn.
+Assembly:
+
+1. Put the source in `tests/asm/`, with a global `_start` label. For Thumb, mark it `.thumb_func`.
+2. Build it with the `build_asm` fixture from `tests/conftest.py`: `build_asm("thumb", "my_test.S")` or `build_asm("rv32", "my_test.S")`. It returns the path of the linked ELF (text at `0x1000` by default).
+3. Load it with `thumbv.elf.load(path)` to get its segments, entry point and symbols. See `tests/test_smoke.py` for an example.
+
+C:
+
+1. Put the source in `tests/c/`. There is no C library; libgcc is linked for helper routines.
+2. Build a Thumb-only or RV32-only program with `build_c("thumb", "my_test.c")` or `build_c("rv32", ...)`. This adds the startup file (`crt_thumb.S`/`crt_rv32.S`: set SP, call `main`, spin at `done`) and the linker script from `tests/link/`.
+3. Build a mixed program with `build_mixed(["lib.c"], ["main.c"])`. The Thumb library is linked first (code at `0x10000`, data at `0x2000_0000`); its global functions become absolute symbols in the RISC-V link (code at `0x20000`, data at `0x2000_4000`). The stack is shared, with its top at `0x2001_0000`.
+4. Run it with `thumbv.lockstep.run(images, stop=...)`. See `tests/test_lockstep_programs.py`.
 
 ### CI
 

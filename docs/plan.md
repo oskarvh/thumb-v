@@ -167,11 +167,14 @@ Goal: a software implementation of Thumb-V that runs real Thumb code correctly, 
 - Uses no custom micro-ops so far. Any that are added later (e.g. branch-on-NZCV for strategy C, the ARM-shift op from Q3) get encodings in the `custom-0`/`custom-1` opcode space and are documented in `docs/microops.md`.
 - Expansion rules and measured op counts are in `docs/isa-coverage.md`.
 
-**0.4 Executor and lockstep harness: `model/thumbv/machine.py`** (executor and single-instruction lockstep done)
-- Done: a minimal RV32IM interpreter that runs native RISC-V code directly and Thumb code through the expander, choosing by the fetch address against the programmable regions. Every op in a Thumb sequence executes with `pc` = the Thumb address.
-- Done: single-instruction lockstep (`tests/test_lockstep_single.py`). 300 random instances of each encoding run in Unicorn and in the model, comparing registers, flags, next PC, RAM and PRIMASK.
-- Thumb-only program lockstep: load an ELF into the model and into Unicorn (`UC_ARCH_ARM`, `UC_MODE_THUMB | UC_MODE_MCLASS`), step one Thumb instruction in each and compare r0–r15 and NZCV. Report the first divergence with disassembly.
-- Mixed lockstep: Unicorn can't run RISC-V and Thumb together, so for each RISC-V→Thumb call, run the same Thumb function in Unicorn with the same arguments and memory and compare return values and memory afterwards.
+**0.4 Executor and lockstep harness: `model/thumbv/machine.py`, `model/thumbv/lockstep.py`** (done)
+- A minimal RV32IM interpreter that runs native RISC-V code directly and Thumb code through the expander, choosing by the fetch address against the programmable regions. Every op in a Thumb sequence executes with `pc` = the Thumb address.
+- Single-instruction lockstep (`tests/test_lockstep_single.py`): 300 random instances of each encoding run in Unicorn and in the model, comparing registers, flags, next PC, RAM and PRIMASK.
+- Program lockstep (`tests/test_lockstep_programs.py`, also `python -m thumbv.lockstep`), for Thumb-only and mixed programs alike. The reference is a hybrid: Unicorn runs Thumb code as a Cortex-M0, and a second RV32 executor runs RISC-V code on Unicorn's memory, with ARM registers handed over through the D2 mapping at each switch between instruction sets. This replaces the planned per-call comparison for mixed programs with a per-instruction one, including callbacks from Thumb into RISC-V.
+  - After every step it compares the PC, r0–r14, NZCV (after Thumb instructions), the memory writes of that step, and the RISC-V registers Thumb code must preserve (gp, tp, s8–s11). Memory is compared in full at the end. The first divergence is reported with disassembly, the expansion, and the preceding instructions.
+  - Where Thumb-V deliberately differs from a Cortex-M, the reference is adjusted: a `BX`/`BLX`/`POP {pc}` to an even RISC-V address gets bit 0 set for that instruction (Q1), and on entry to Thumb code from RISC-V the reference adopts the model's flags (they are UNKNOWN after a call under AAPCS).
+- Test programs: a Thumb-only C self-test (21,100 Thumb instructions, including 27 libgcc helpers: division, 64-bit shifts and multiply, soft-float, switch tables) and a mixed program (RISC-V `main` calling a Thumb library, with a callback into RISC-V; 20 switches between instruction sets). Both match the reference throughout.
+- First data point for D1: the self-test executes 5.4 RV32 ops per Thumb instruction under strategy A.
 
 **0.5 Test corpus: `tests/`**
 - Directed: one small assembly test per instruction class, including flag edge cases (`0x7FFFFFFF + 1`, `0 - 1`, `SBCS` with carry in/out, shifts by 0, 32 and >32).
@@ -267,8 +270,8 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 ## Immediate next actions
 
-Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), and the executor and single-instruction lockstep from 0.4.
+Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep).
 
-1. Program-level lockstep (rest of 0.4): run whole Thumb ELF programs in the model and Unicorn, comparing state after every instruction.
-2. Test corpus (0.5): directed tests, random instruction sequences, CoreMark. Needs picolibc for RISC-V once C programs are involved.
-3. Interworking prototype (0.6) and measurements (0.7).
+1. Test corpus (0.5): directed tests, random instruction sequences, CoreMark and Embench. Larger C programs will need a C library (newlib for ARM, picolibc for RISC-V).
+2. Interworking prototype (0.6): the build flow and thunks for signatures that differ between the ABIs. The test fixture `build_mixed` is a first, minimal version of the build flow.
+3. Measurements (0.7).

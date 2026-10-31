@@ -106,4 +106,4 @@ See [`docs/plan.md`](docs/plan.md) for details and exit criteria.
 
 ## Verification
 
-Run Thumb programs in Verilator and in a reference ARMv6-M model (Unicorn) and compare register and flag state after every instruction. For mixed programs, compare return values and memory at each RISC-V→Thumb call. Use random instruction sequences to catch flag edge cases (`SUBS`/`SBCS` carry and overflow especially), and check the RTL expander against the software model for every 16-bit encoding.
+Run programs in the model (and later in Verilator) and in a reference, and compare state after every instruction. The reference is Unicorn as a Cortex-M0 for Thumb code; for mixed programs, a second RV32 executor runs the RISC-V parts on the same memory (`python -m thumbv.lockstep`). Use random instruction sequences to catch flag edge cases (`SUBS`/`SBCS` carry and overflow especially), and check the RTL expander against the software model for every 16-bit encoding.
