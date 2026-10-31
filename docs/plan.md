@@ -143,8 +143,8 @@ For the early phases, use on-chip M9K RAM (~66 KB on the 10CL025) and defer the 
 | D1 | Flags strategy for the RTL | **Decided:** C, a plain hardware NZCV unit, keeping custom hardware to a minimum: 1.25 RV32 ops per Thumb instruction over 21 programs, against 3.92 for A, 2.34 for the best realisable A variant and 2.67 for B. The ARM-shift micro-op (Q3) and fused `CMP` + `B<cond>` (together 1.03) are not adopted, but stay options for Phase 7 ([flags-decision.md](flags-decision.md)) |
 | D2 | Register mapping | **Decided:** ABI-aligned mapping (section 1) |
 | D3 | When interrupts are taken | **Decided:** Thumb instruction boundaries only (section 6) |
-| D4 | Base core | Proposed: VexRiscv, confirmed by the Phase 1 code-reading spike. VexiiRiscv is the newer successor and worth a look. NEORV32 is the fallback. |
-| D5 | Where the expander lives | Proposed: a VexRiscv plugin or patch in SpinalHDL, since it must sit inside the fetch pipeline. Decide in Phase 1.3. |
+| D4 | Base core | Proposed after 1.3: VexRiscv. Every patch point exists, and the PC-hold spike worked in about 30 lines. VexiiRiscv was not evaluated in depth; NEORV32 stays the fallback ([vexriscv-notes.md](vexriscv-notes.md#decisions)) |
+| D5 | Where the expander lives | Proposed after 1.3: a Thumb-V copy of VexRiscv's fetcher (`Fetcher.scala` + `IBusSimplePlugin.scala`) in `rtl/core`, with changes marked; the region CSRs, NZCV unit and interrupt gating as separate plugins through VexRiscv's services. A separate plugin can't reach the fetcher's internals ([vexriscv-notes.md](vexriscv-notes.md#decisions)) |
 | D6 | SoC wrapper | Proposed: a minimal hand-written SoC around the core. LiteX for a first board smoke test only. |
 | D7 | Mode selection | **Decided:** programmable Thumb address regions (section 2). Number of regions and the CSR layout still open. |
 | D8 | Interworking build flow | **Decided:** link the Thumb side first; Thumb calls into RISC-V go through a jump table at a fixed address; RISC-V thunks are generated from an interface header only where the ABIs differ ([interworking.md](interworking.md)) |
@@ -217,7 +217,7 @@ Goal: an unmodified RISC-V core running in Verilator and on the CYC1000, and a p
 - `rtl/soc/` ([soc.md](soc.md)): code RAM at 0, data RAM at `0x2000_0000`, a UART transmitter and LEDs, with the model's memory map so the same ELF files run on both. `sim/tb.sv` is an all-SystemVerilog testbench (`verilator --binary --timing`) that decodes the UART line and logs the RVFI trace.
 - `thumbv.rtlsim` replays the trace against the model: PC, instruction, register write and stored bytes for every retired instruction. Hello world and the all-RISC-V builds of the interworking programs match the model (CPI 1.4–1.7 without the UART polling). `make test-rtl`, also in CI.
 
-**1.3 Code-reading spike → `docs/vexriscv-notes.md`.** Find and document:
+**1.3 Code-reading spike → `docs/vexriscv-notes.md`.** (done) Find and document:
 - The RVC decompressor and halfword aligner (`IBusFetcherImpl` / `RvcDecompressor`), and how the instruction length is decided.
 - How each instruction's PC travels with it, and confirm that emitting N ops with the same PC payload (stalling the input stream) gives PC-hold behaviour with no other changes.
 - Link-value calculation (`BranchPlugin`: `pc + (isRvc ? 2 : 4)`).
@@ -225,6 +225,14 @@ Goal: an unmodified RISC-V core running in Verilator and on the CYC1000, and a p
 - How to add CSRs (Thumb region registers, later NZCV) through the CSR plugin.
 - How external interrupts reach the core (single line, or VexRiscv's interrupt-array plugin) and what hardware vectoring would take.
 - Settle D4 and D5 from this.
+- Done ([vexriscv-notes.md](vexriscv-notes.md)), confirmed by a simulation spike that ran 4-op sequences held at one PC, one op per cycle, with correct register reads, bypassing and flushes:
+  - **Expander:** sits in the fetcher's injector, before decode.
+  - **PC-hold:** decode's PC is its own register, and the fetcher's existing `injectedDecode` flag stops it advancing.
+  - **Register file reads:** the synchronous register file's anticipated read address must be the next op's.
+  - **Link value (Q2):** `pc + (IS_RVC ? 2 : 4)`, answered.
+  - **Interrupt gating:** through the existing `InterruptionInhibitor` service.
+  - **CSRs:** added through `CsrInterface`.
+  - **Vectoring:** up to 16 hardware-vectored interrupts with stock plugins.
 
 **1.4 Board bring-up.** Quartus Prime Lite project for the 10CL025, programmed with `openFPGALoader` (which supports the CYC1000's on-board Arrow USB Blaster). LED blinky plus UART hello from the same binary as in simulation. Record a resource and Fmax baseline (LEs, M9Ks, MHz) in `docs/resources.md`.
 
@@ -289,6 +297,7 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-Phase 0 is closed. Done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep).
+Phase 0 is closed. Done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)).
 
-1. Phase 1.3: the code-reading spike: where the expander, PC-hold, interrupt gating and the NZCV CSR go in VexRiscv ([vexriscv-notes.md](vexriscv-notes.md)); settle D4 and D5.
+1. Confirm D4 and D5 as proposed after 1.3.
+2. Phase 1.4: board bring-up on the CYC1000 and the resource and Fmax baseline.
