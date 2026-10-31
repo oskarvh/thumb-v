@@ -143,8 +143,8 @@ For the early phases, use on-chip M9K RAM (~66 KB on the 10CL025) and defer the 
 | D1 | Flags strategy for the RTL | **Decided:** C, a plain hardware NZCV unit, keeping custom hardware to a minimum: 1.25 RV32 ops per Thumb instruction over 21 programs, against 3.92 for A, 2.34 for the best realisable A variant and 2.67 for B. The ARM-shift micro-op (Q3) and fused `CMP` + `B<cond>` (together 1.03) are not adopted, but stay options for Phase 7 ([flags-decision.md](flags-decision.md)) |
 | D2 | Register mapping | **Decided:** ABI-aligned mapping (section 1) |
 | D3 | When interrupts are taken | **Decided:** Thumb instruction boundaries only (section 6) |
-| D4 | Base core | Proposed after 1.3: VexRiscv. Every patch point exists, and the PC-hold spike worked in about 30 lines. VexiiRiscv was not evaluated in depth; NEORV32 stays the fallback ([vexriscv-notes.md](vexriscv-notes.md#decisions)) |
-| D5 | Where the expander lives | Proposed after 1.3: a Thumb-V copy of VexRiscv's fetcher (`Fetcher.scala` + `IBusSimplePlugin.scala`) in `rtl/core`, with changes marked; the region CSRs, NZCV unit and interrupt gating as separate plugins through VexRiscv's services. A separate plugin can't reach the fetcher's internals ([vexriscv-notes.md](vexriscv-notes.md#decisions)) |
+| D4 | Base core | **Decided** after 1.3: VexRiscv. Every patch point exists, and the PC-hold spike worked in about 30 lines. VexiiRiscv was not evaluated in depth; NEORV32 stays the fallback ([vexriscv-notes.md](vexriscv-notes.md#decisions)) |
+| D5 | Where the expander lives | **Decided** after 1.3: a Thumb-V copy of VexRiscv's fetcher (`Fetcher.scala` + `IBusSimplePlugin.scala`) in `rtl/core`, with changes marked; the region CSRs, NZCV unit and interrupt gating as separate plugins through VexRiscv's services. A separate plugin can't reach the fetcher's internals ([vexriscv-notes.md](vexriscv-notes.md#decisions)) |
 | D6 | SoC wrapper | Proposed: a minimal hand-written SoC around the core. LiteX for a first board smoke test only. |
 | D7 | Mode selection | **Decided:** programmable Thumb address regions (section 2). Number of regions and the CSR layout still open. |
 | D8 | Interworking build flow | **Decided:** link the Thumb side first; Thumb calls into RISC-V go through a jump table at a fixed address; RISC-V thunks are generated from an interface header only where the ABIs differ ([interworking.md](interworking.md)) |
@@ -299,5 +299,4 @@ Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (execut
 
 Phase 0 is closed. Done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)).
 
-1. Confirm D4 and D5 as proposed after 1.3.
-2. Phase 1.4: board bring-up on the CYC1000 and the resource and Fmax baseline.
+1. Phase 1.4: board bring-up on the CYC1000 and the resource and Fmax baseline.

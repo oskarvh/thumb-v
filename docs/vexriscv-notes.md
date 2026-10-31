@@ -124,11 +124,11 @@ csr.onWrite(0x7C8) { ... }        // side effect on write
 
 ## Decisions
 
-**D4 (base core): VexRiscv, confirmed.**
+**D4 (base core): VexRiscv.** Decided.
 - **Fit:** the patch points all exist and are small, and the spike shows the hard part (PC-hold with correct register reads and bypassing) works with about 30 lines.
 - **Alternatives:** VexiiRiscv wasn't evaluated in depth. Switching would mean redoing 1.1 and 1.2, for a core aimed at higher performance and Linux-class systems, with no specific benefit here other than Zbb. NEORV32 stays the fallback but isn't needed.
 
-**D5 (where the expander lives): in a Thumb-V copy of VexRiscv's fetcher, with the rest as separate plugins.**
+**D5 (where the expander lives): in a Thumb-V copy of VexRiscv's fetcher, with the rest as separate plugins.** Decided: option (a).
 - **Why the fetcher:** the expander, the Thumb length rule and the sequencer must change the inside of `IBusFetcherImpl`'s `FetchArea`: the aligner, the injector and `decodePc`. No other plugin can reach that area, because `IBusSimplePlugin.build` creates it as an anonymous object and doesn't keep a reference. Overriding its signals needs `allowOverride` on each one.
 - **Options:**
   - **(a) Copy the fetcher (recommended).** Copy `Fetcher.scala` and `IBusSimplePlugin.scala` (about 1,070 lines) into `rtl/core/src/main/scala/thumbv/` as `ThumbFetcher`, marking every change with `// THUMBV`. The submodule stays stock, `diff` against it shows exactly what changed, and everything stays in this repository.
