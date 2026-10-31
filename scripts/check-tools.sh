@@ -20,10 +20,12 @@ check missing uv                      "Python environment"
 check missing arm-none-eabi-gcc       "Thumb test programs"
 check missing riscv64-unknown-elf-gcc "RISC-V test programs"
 
-echo "Phase 1 and later (optional for now):"
-check later   verilator               "RTL simulation"
+echo "Phase 1 (make core):"
 check later   java                    "SpinalHDL / VexRiscv"
 check later   sbt                     "SpinalHDL / VexRiscv"
+check later   verilator               "linting and RTL simulation"
+
+echo "Board (optional for now):"
 check later   openFPGALoader          "programming the CYC1000"
 check later   quartus_sh              "Quartus Prime Lite synthesis"
 

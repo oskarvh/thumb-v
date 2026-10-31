@@ -209,7 +209,9 @@ Everything below runs in program lockstep unless noted, and all of it passes.
 
 Goal: an unmodified RISC-V core running in Verilator and on the CYC1000, and a precise map of where the patches go.
 
-**1.1 Build the core.** VexRiscv generated from SpinalHDL in a fixed configuration: RV32IMC, machine mode only, no MMU, simple instruction bus or a small I-cache. Pin the VexRiscv commit as a git submodule.
+**1.1 Build the core.** (done) VexRiscv generated from SpinalHDL in a fixed configuration: RV32IMC, machine mode only, no MMU, simple instruction bus or a small I-cache. Pin the VexRiscv commit as a git submodule.
+- VexRiscv pinned at `baf7dc82` (SpinalHDL 1.13.0). The configuration is `rtl/core/` ([core.md](core.md)): RV32IMC, machine mode, no MMU or caches, simple buses, traps for illegal instructions, misaligned accesses and `ecall`/`ebreak` like the model.
+- `make core` generates `build/rtl/VexRiscv.v` and lints it with Verilator; CI runs it.
 
 **1.2 Simulation SoC.** A Verilator testbench with on-chip RAM, a UART model and a RISC-V hello world. Add an instruction-retire trace port (VexRiscv's RVFI-style/formal hooks) so later phases can lockstep against the model.
 
@@ -264,7 +266,7 @@ tests/
   interwork/   RISC-V ↔ Thumb call tests
 firmware/      shared trap entry routine, ARM-only exception firmware (C + startup asm)
 rtl/           expander, flags unit, region CSRs, interrupt controller, timer, SoC wrapper, peripheral shim
-third_party/   VexRiscv (submodule)
+third_party/   VexRiscv, CoreMark, Embench (submodules)
 sim/           Verilator testbenches
 fpga/cyc1000/  Quartus project, pin constraints
 ```
@@ -285,6 +287,6 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-Phase 0 is closed.
+Phase 0 is closed. Done: 1.1 (core generated).
 
-1. Phase 1.1: build VexRiscv in a fixed RV32IMC configuration, pinned as a submodule.
+1. Phase 1.2: simulation SoC in Verilator (on-chip RAM, UART model, retire trace port) and a RISC-V hello world.

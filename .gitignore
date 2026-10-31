@@ -4,3 +4,7 @@ __pycache__/
 build/
 *.elf
 *.o
+# sbt
+target/
+.bsp/
+project/project/

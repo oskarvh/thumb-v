@@ -1,4 +1,4 @@
-.PHONY: help setup check-tools test test-slow measure clean
+.PHONY: help setup check-tools test test-slow measure core clean
 
 help:
 	@echo "make setup        create the Python environment (uv)"
@@ -6,6 +6,7 @@ help:
 	@echo "make test         run the model test suite"
 	@echo "make test-slow    also run the slow tests (benchmarks, many random programs)"
 	@echo "make measure      cost the flags strategies over all benchmarks (Phase 0.7)"
+	@echo "make core         generate the VexRiscv core into build/rtl/ and lint it (Phase 1.1)"
 	@echo "make clean        remove build outputs and caches"
 
 setup:
@@ -23,6 +24,10 @@ test-slow:
 
 measure:
 	uv run python -m thumbv.measure
+
+core:
+	cd rtl/core && sbt -batch "runMain thumbv.GenCore $(CURDIR)/build/rtl"
+	verilator --lint-only --top-module VexRiscv build/rtl/VexRiscv.v
 
 clean:
 	rm -rf build .pytest_cache

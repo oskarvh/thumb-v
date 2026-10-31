@@ -34,7 +34,7 @@ make test         # make test-slow also runs the benchmarks in lockstep
   1. Hold the PC during a sequence: every injected instruction carries the Thumb instruction's address, and only the last advances the PC (by 2, or 4 for `BL`).
   2. Take interrupts only at Thumb instruction boundaries.
 - **Mode by programmable address range.** A few region CSRs mark which address ranges decode as Thumb; everything else decodes as RISC-V. No mode bit is needed: a `jal` into a Thumb region starts decoding Thumb, a `BX LR` back to a RISC-V caller switches back, and `mret` resumes in the right decoder from `mepc`.
-- **Core.** VexRiscv (pipelined, plugin-based, has RVC) is the preferred base. NEORV32 (VHDL, readable, separate decompressor) is the alternative.
+- **Core.** VexRiscv (pipelined, plugin-based, has RVC) is the preferred base, configured as RV32IMC in [`docs/core.md`](docs/core.md) (`make core`). NEORV32 (VHDL, readable, separate decompressor) is the alternative.
 
 ## Register mapping
 

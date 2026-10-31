@@ -13,9 +13,9 @@ Everything Thumb-V depends on, including what later phases will need. Install in
 | newlib for ARM | C library (string functions, libm, stub syscalls) for the Cortex-M0 benchmarks | Phase 0.5 | 4.4.0 | `libnewlib-arm-none-eabi` (install explicitly with `--no-install-recommends`) | BSD-style |
 | riscv64-unknown-elf-gcc + binutils | RV32 programs, firmware (`-march=rv32im -mabi=ilp32`; rv32e multilibs included) | Phase 0 | 13.2.0 | `gcc-riscv64-unknown-elf` | GPL-3.0 with runtime exception |
 | picolibc for RISC-V | C library for RV32 programs that need one (not needed so far: the RISC-V test programs are freestanding) | when needed | — | `picolibc-riscv64-unknown-elf` | BSD-style |
-| Verilator | RTL simulation | Phase 1 | — (Ubuntu ships 5.020) | `verilator` | LGPL-3.0 / Artistic-2.0 |
-| Java (JDK) | SpinalHDL / VexRiscv generation | Phase 1 | 21 installed; check which JDK VexRiscv's sbt version supports | `openjdk-17-jdk` if 21 fails | GPL-2.0 with classpath exception |
-| sbt | SpinalHDL / VexRiscv build | Phase 1 | — | [scala-sbt.org](https://www.scala-sbt.org/download) | Apache-2.0 |
+| Verilator | linting the generated core, RTL simulation | Phase 1 | 5.020 | `verilator` | LGPL-3.0 / Artistic-2.0 |
+| Java (JDK) | SpinalHDL / VexRiscv generation | Phase 1 | OpenJDK 21 | `openjdk-21-jdk` | GPL-2.0 with classpath exception |
+| sbt | SpinalHDL / VexRiscv build. `rtl/core` pins sbt 1.10.7 (downloaded by the launcher) and Scala 2.12.18, VexRiscv's | Phase 1 | launcher 2.0.12 | sbt's apt repository, see setup.md | Apache-2.0 |
 | Quartus Prime Lite | synthesis for the Cyclone 10 LP | Phase 1.4 | — | Intel download | proprietary, free |
 | openFPGALoader | programming the CYC1000 | Phase 1.4 | — | `openfpgaloader` | Apache-2.0 |
 
@@ -37,8 +37,8 @@ Unicorn is GPL-2.0 while the project is Apache-2.0. That's fine for a developmen
 
 | Dependency | Used for | Needed from | Pinned at | License |
 |---|---|---|---|---|
-| SpinalHDL | HDL that VexRiscv is written in | Phase 1 | — | LGPL-3.0 (core), MIT (lib) |
-| VexRiscv | base RISC-V core (git submodule in `third_party/`) | Phase 1 | — | MIT |
+| SpinalHDL | HDL that VexRiscv is written in; fetched by sbt at the version VexRiscv's `build.sbt` names | Phase 1 | 1.13.0 | LGPL-3.0 (core), MIT (lib) |
+| VexRiscv | base RISC-V core, submodule `third_party/VexRiscv` | Phase 1 | `baf7dc82` (2026-09-24) | MIT |
 | SDRAM controller | 8 MB SDRAM on the CYC1000 | Phase 7 | not chosen | — |
 
 ## Test programs and benchmarks

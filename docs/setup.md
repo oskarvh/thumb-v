@@ -28,6 +28,7 @@ Tests skip when a cross toolchain is missing. Set `THUMBV_REQUIRE_TOOLS=1` to ma
 | `make test` | Run the test suite (about 20 s) |
 | `make test-slow` | Also run the slow tests: CoreMark and Embench in lockstep, 500 more random programs (about 5 min) |
 | `make measure` | Cost the flags strategies over all benchmarks and print the table in [flags-decision.md](flags-decision.md) (about 20 s) |
+| `make core` | Generate the VexRiscv core into `build/rtl/` and lint it (Phase 1, needs sbt and Verilator) |
 | `make clean` | Remove `build/` and Python caches |
 
 ### Running tests selectively
@@ -128,7 +129,17 @@ C:
 
 ## Phase 1 and later
 
-- **Verilator** (`sudo apt-get install verilator`) for RTL simulation. Ubuntu 24.04 ships 5.020.
-- **Java and sbt** for SpinalHDL, which generates VexRiscv. Install sbt from [scala-sbt.org](https://www.scala-sbt.org/download).
+Generating the core needs Java, sbt and Verilator. sbt comes from its own apt repository. Run this in a terminal, since `sudo` needs to ask for a password:
+
+```sh
+echo "deb https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
+curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo tee /etc/apt/trusted.gpg.d/sbt.asc
+sudo apt-get update && sudo apt-get install -y openjdk-21-jdk sbt verilator
+make core
+```
+
+`make core` generates the VexRiscv configuration in `rtl/core/` into `build/rtl/VexRiscv.v` and lints it with Verilator; any warning fails. The first run downloads Scala and SpinalHDL (about 30 s, more on a slow connection); later runs take a few seconds. See [core.md](core.md) for the configuration.
+
+Later:
 - **Quartus Prime Lite** for the Cyclone 10 LP, from Intel's website.
 - **openFPGALoader** (`sudo apt-get install openfpgaloader`) to program the CYC1000.
