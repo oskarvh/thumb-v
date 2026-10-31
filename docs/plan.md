@@ -140,7 +140,7 @@ For the early phases, use on-chip M9K RAM (~66 KB on the 10CL025) and defer the 
 
 | # | Decision | Status |
 |---|---|---|
-| D1 | Flags strategy for the RTL | **Proposed after the 0.7 measurements, awaiting OK:** C, a hardware NZCV unit, then the ARM-shift micro-op (Q3), then fused `CMP` + `B<cond>`. Over 21 programs: A 3.92 RV32 ops per Thumb instruction, the best realisable A variant 2.34, B 2.67, C 1.25, C with both additions 1.03 ([flags-decision.md](flags-decision.md)) |
+| D1 | Flags strategy for the RTL | **Decided:** C, a plain hardware NZCV unit, keeping custom hardware to a minimum: 1.25 RV32 ops per Thumb instruction over 21 programs, against 3.92 for A, 2.34 for the best realisable A variant and 2.67 for B. The ARM-shift micro-op (Q3) and fused `CMP` + `B<cond>` (together 1.03) are not adopted, but stay options for Phase 7 ([flags-decision.md](flags-decision.md)) |
 | D2 | Register mapping | **Decided:** ABI-aligned mapping (section 1) |
 | D3 | When interrupts are taken | **Decided:** Thumb instruction boundaries only (section 6) |
 | D4 | Base core | Proposed: VexRiscv, confirmed by the Phase 1 code-reading spike. VexiiRiscv is the newer successor and worth a look. NEORV32 is the fallback. |
@@ -199,7 +199,9 @@ Everything below runs in program lockstep unless noted, and all of it passes.
 **0.7 Measurement → `docs/flags-decision.md`** (done)
 - `model/thumbv/measure.py` (`make measure`) traces CoreMark, all of Embench and a soft-float workload (`tests/bench/float/`) in the model. It follows every flag write to its reads, and costs strategies A, A with a k-instruction lookahead, A with perfect dead-flag elimination, B and C (plus fusion and the ARM-shift micro-op) from the trace.
 - Results: 71% of flag-setting instructions have no flag read; strategy A spends 69% of its ops on flags; C costs 1.25 ops per Thumb instruction against A's 3.92. 90% of `B<cond>` are fusable with the preceding `CMP`. No `BL` needs the long form. Register shifts are 0.9% of instructions (up to 8.5% in SHA-256), 95% of them in integer code.
-- Proposed: D1 = C, Q3 = ARM-shift micro-op. See [flags-decision.md](flags-decision.md).
+- Decided: D1 = C (plain hardware NZCV unit), Q3 = no micro-op for now. See [flags-decision.md](flags-decision.md).
+
+**Phase 0 closed (2026-10-31):** all exit criteria are met.
 
 **Exit criteria:** every ARMv6-M instruction is modelled; directed and random tests pass lockstep against Unicorn; CoreMark built for Cortex-M0 completes with the correct CRC; a RISC-V program calls Thumb library functions (and is called back) correctly in the model; D1 and D8 are decided.
 
@@ -220,7 +222,7 @@ Goal: an unmodified RISC-V core running in Verilator and on the CYC1000, and a p
 - How external interrupts reach the core (single line, or VexRiscv's interrupt-array plugin) and what hardware vectoring would take.
 - Settle D4 and D5 from this.
 
-**1.4 Board bring-up.** Quartus Prime Lite project for the 10CL025, programmed with `openFPGALoader` (which supports the CYC1000's on-board Arrow USB Blaster). LED blinky plus UART hello from the same binary as in simulation. Record a resource and Fmax baseline (LEs, M9Ks, MHz) in `docs/resources.md`. If 0.7 shows register shifts are frequent, also synthesise the ARM-shift micro-op variant of the shifter and record its LE and Fmax cost (Q3).
+**1.4 Board bring-up.** Quartus Prime Lite project for the 10CL025, programmed with `openFPGALoader` (which supports the CYC1000's on-board Arrow USB Blaster). LED blinky plus UART hello from the same binary as in simulation. Record a resource and Fmax baseline (LEs, M9Ks, MHz) in `docs/resources.md`.
 
 **Exit criteria:** the same RISC-V binary runs in Verilator and on the board; the patch points are documented; LE/Fmax baseline recorded.
 
@@ -240,14 +242,14 @@ Goal: a RISC-V program calls its first Thumb function in hardware.
 Each will get its own detailed section once Phase 2 is done.
 
 - **Phase 3: sequencer.** Multi-op expansions (`PUSH`/`POP`/`LDM`/`STM`, register-offset loads, long `BL`, register shifts, `REV`, `ADCS`/`SBCS`), the last-of-sequence bit and boundary-only interrupt gating.
-- **Phase 4: flags,** using the strategy chosen in D1. If it is hardware NZCV, this replaces the README's phases 4 and 6.
+- **Phase 4: flags,** with the hardware NZCV unit (D1): the unit and its CSR, the set-flags side-band bit, branch-on-condition, carry-in for `ADCS`/`SBCS`, and a strategy C expansion in the model to check the RTL against.
 - **Phase 5: interrupts and mixed execution in practice.**
   - The unified controller (NVIC programming model) and the shared timer (SysTick / `mtime` views) in RTL, verified in simulation against a model of the controller.
   - The shared RISC-V entry routine and synchronous trap handler (`SVC`/`ecall` from either instruction set). Milestone: a timer interrupt handled by a Thumb ISR from a Cortex-M-compiled object, interrupting RISC-V code, and the reverse.
   - The thunk generator and build flow from Phase 0 applied to a real ARM-only library (e.g. a prebuilt Cortex-M0 DSP or crypto library) called from RISC-V.
   - An RTOS (FreeRTOS or Zephyr) with a Thumb task alongside native tasks, including NZCV in the context switch.
 - **Phase 6: ARM-only mode.** Cortex-M exception emulation on top of the Phase 5 controller and entry path: the stacked frame, EXC_RETURN, MSP/PSP banking, PendSV, ARM fault escalation, an SCB subset and a GPIO shim on the LEDs. Milestone: an unmodified Cortex-M0 blinky ELF runs on the board.
-- **Phase 7: performance and scale.** SDRAM controller, CoreMark on the board, Zbb for `REV`/`UXT*`/`ROR`, and comparison against the Phase 0 model's predicted ratio.
+- **Phase 7: performance and scale.** SDRAM controller, CoreMark on the board, Zbb for `REV`/`UXT*`/`ROR`, and comparison against the Phase 0 model's predicted ratio. If needed, the options left open by D1: the ARM-shift micro-op and fused `CMP` + `B<cond>`.
 
 ## Proposed repository layout
 
@@ -283,5 +285,6 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-1. Confirm D1 (hardware NZCV) and Q3 (ARM-shift micro-op) from [flags-decision.md](flags-decision.md). That closes Phase 0's exit criteria.
-2. Phase 1.1: build VexRiscv in a fixed RV32IMC configuration, pinned as a submodule.
+Phase 0 is closed.
+
+1. Phase 1.1: build VexRiscv in a fixed RV32IMC configuration, pinned as a submodule.

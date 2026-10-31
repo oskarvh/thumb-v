@@ -2,7 +2,7 @@
 
 Phase 0.7 measures what each way of handling ARM's NZCV flags would cost on real compiled code, to settle decision D1 in [plan.md](plan.md), and answers Q3 (register shifts) from [isa-coverage.md](isa-coverage.md) along the way.
 
-**Recommendation: strategy C, a hardware NZCV unit.** Add fused compare-and-branch and an ARM-shift micro-op (Q3) on top of it. Over 21 programs, C costs 1.25 RV32 ops per Thumb instruction, or 1.03 with both additions. Eager software flags (A) cost 3.92. The best software scheme that hardware could realistically implement costs 2.34. Even a perfect, unrealisable dead-flag elimination costs 1.47, which is still worse than plain C.
+**Decided (2026-10-31): strategy C, a plain hardware NZCV unit,** with no further custom hardware: no fused compare-and-branch and no ARM-shift micro-op (Q3) for now, to keep the core changes minimal. Over 21 programs, C costs 1.25 RV32 ops per Thumb instruction (1.03 with both additions, which stay documented options). Eager software flags (A) cost 3.92. The best software scheme that hardware could realistically implement costs 2.34. Even a perfect, unrealisable dead-flag elimination costs 1.47, which is still worse than plain C.
 
 ## How it was measured
 
@@ -114,19 +114,21 @@ None of the 17,780 `BL`s executed (822 static) needs the 2-op `auipc` + `jalr` f
 - **Cost under C.** The 5-op result expansion in isa-coverage.md assumed software flags. Under C, the flags unit still needs the shifter's carry-out, which RISC-V's `sll`/`srl`/`sra` don't produce. Computing C in software keeps register shifts at 13–17 ops, and that is what makes `nettle-sha256` cost 2.07.
 - **With the micro-op.** The ARM-shift micro-op from isa-coverage.md produces the ARM result and hands its carry-out to the flags unit in one op. Over all programs that is 0.12 ops per instruction (1.15 → 1.03). On the crypto and qrduino code it is the difference between about 2.0 and 1.0.
 
-**Recommendation for Q3: the ARM-shift micro-op, as part of the flags unit.** The LE and Fmax cost still has to be measured when the core is synthesised (Phase 1.4). If it is too expensive, the fallback is a 5-op result plus a micro-op that only computes the carry-out.
+**Decision for Q3: no ARM-shift micro-op for now.** Register shifts use the 5-op result expansion and compute C in software, then write it into the flags unit: 13–17 ops each, which is already included in C's 1.25. The micro-op stays a documented option for Phase 7, where it would mainly help crypto-style code (SHA-256 2.07 → 1.04, qrduino 1.76 → 1.02).
 
 ## Decision
 
-**Proposed for D1: strategy C, a hardware NZCV unit,** in this order:
-1. **The unit itself:**
+**D1, decided: strategy C, a hardware NZCV unit,** and nothing more for now:
+1. **The unit:**
    - A 4-bit NZCV register, readable and writable as a CSR (for `MRS`/`MSR APSR`, the interrupt entry routine and RTOS context switches).
    - Flag-setting ALU ops carry a side-band "set flags" bit from the expander, like the last-of-sequence bit, so no new RISC-V encodings are needed for `ADDS`/`SUBS`/….
    - The ALU latches N and Z from the result, and C and V from the adder (C as NOT borrow for subtraction) or from the shifter for immediate shifts.
    - A branch-on-condition op for `B<cond>`.
    - C as carry-in for `ADCS`/`SBCS`.
-2. **The ARM-shift micro-op (Q3),** with its carry-out into the unit.
-3. **Fused `CMP` + `B<cond>`** as a later optimisation (0.08–0.10 ops per instruction).
+   - Register shifts compute C in software and write it into the unit (Q3).
+2. **Not adopted, kept as options for Phase 7** if the measured performance on the board calls for it:
+   - The ARM-shift micro-op (Q3): 0.12 ops per instruction, mostly in crypto code.
+   - Fused `CMP` + `B<cond>`: 0.08–0.10 ops per instruction.
 
 Strategy A stays in the software model as the reference that lockstep checks against. The RTL skips A and B: they would need lookahead buffers, liveness logic and long sequences for every flag-setting instruction, all thrown away once C exists.
 

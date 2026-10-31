@@ -68,7 +68,7 @@ Calls whose signatures differ between the ABIs (more than 4 arguments, misaligne
 | `CPSID`/`CPSIE`, `WFI`, `SVC`, `BKPT` | 1 (`csrci`/`csrsi`, `wfi`, `ecall`, `ebreak`) |
 | `UXTB/UXTH`, `SXTB/SXTH` | 1–2 (1 with Zbb) |
 | `REV`, `RORS` | 4–8 (1 with Zbb) |
-| Shift by register | 3–4 (ARM uses the low byte; shifts ≥ 32 need a range check) |
+| Shift by register | 5 for the result (ARM uses the low byte; shifts ≥ 32 need a range check), plus C in software |
 | `PUSH`/`POP`/`LDM`/`STM` | 1 per register + 1 |
 | `ADCS`/`SBCS` | 4–6 |
 
@@ -83,7 +83,7 @@ Nearly every 16-bit Thumb data-processing instruction sets flags, so flag handli
 | **Hardware flags unit:** latch NZCV from the ALU, plus a branch-on-condition op | 1.25 |
 | Hardware flags unit with fused `CMP` + `B<cond>` and an ARM-shift micro-op | 1.03 |
 
-71% of flag-setting instructions never have their flags read, but hardware can't see that cheaply, so the proposal is the hardware flags unit. Eager flags stay in the software model as the reference.
+71% of flag-setting instructions never have their flags read, but hardware can't see that cheaply. **Decided: the plain hardware flags unit,** keeping custom hardware to a minimum; the fused compare-and-branch and the ARM-shift micro-op stay options for later. Eager flags stay in the software model as the reference.
 
 ## Interrupts and exceptions
 
@@ -100,11 +100,11 @@ The NVIC and SysTick are real hardware (see above). In ARM-only mode, vendor per
 
 See [`docs/plan.md`](docs/plan.md) for details and exit criteria.
 
-0. Software golden model: Thumb→RV32 expander, executor, lockstep against Unicorn, interworking prototype, flags measurements.
+0. Software golden model: Thumb→RV32 expander, executor, lockstep against Unicorn, interworking prototype, flags measurements. **Done.**
 1. Bring up a stock RISC-V soft core in Verilator and on the CYC1000 with UART and LEDs.
 2. Thumb region CSRs and a combinational expander for 1:1 instructions plus `B`/`BX`/`BL`; a RISC-V program calls a Thumb function.
 3. Sequencer for multi-instruction expansions; PC-hold and interrupt-boundary patches.
-4. Flag handling, using the chosen strategy.
+4. Hardware flags unit (NZCV).
 5. Unified interrupt controller and shared entry routine; real ARM libraries and an RTOS with Thumb tasks.
 6. ARM-only mode: Cortex-M exception emulation and a GPIO shim; run an unmodified Cortex-M0 blinky.
 7. Performance: SDRAM, CoreMark on the board, Zbb.
