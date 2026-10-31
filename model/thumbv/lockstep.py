@@ -224,10 +224,15 @@ class Result:
     divergence: Divergence | None = None
     stopped: str = ""              # "stop address", "max steps", or a fault description
     final_regs: list[int] = field(default_factory=list)
+    model: Machine | None = None   # the model's final state
 
     @property
     def ok(self):
         return self.divergence is None and self.stopped == "stop address"
+
+    def read_symbol(self, image, name, size):
+        """Bytes of a symbol in the model's final memory."""
+        return self.model.mem.read_bytes(image.symbols[name], size)
 
 
 _THUMB_DIS = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB | capstone.CS_MODE_MCLASS)
@@ -278,6 +283,37 @@ def _compare(m, ref, thumb_step):
     return problems
 
 
+def _load_model(images, layout, options):
+    m = Machine(thumb_regions=layout.thumb_regions, options=options)
+    for base, size in layout.regions:
+        m.mem.map(base, size)
+    for img in images:
+        for seg in img.segments:
+            m.mem.write_bytes(seg.addr, seg.data)
+    return m
+
+
+def simulate(images, stop: int, entry: int | None = None, max_steps: int = 50_000_000,
+             options: Options = Options()) -> Result:
+    """Run the model alone (no reference) from `entry` until pc == `stop`."""
+    layout = Layout.for_images(images)
+    m = _load_model(images, layout, options)
+    m.pc = (images[0].entry if entry is None else entry) & ~1
+    stop &= ~1
+    result = Result(model=m)
+    try:
+        while result.steps < max_steps and m.pc != stop:
+            m.step()
+            result.steps += 1
+        result.stopped = "stop address" if m.pc == stop else "max steps"
+    except Trap as trap:
+        result.stopped = f"model trap: {trap}"
+        result.divergence = Divergence(result.steps, m.pc, describe(m, layout, m.pc), [result.stopped])
+    result.thumb_steps, result.rv_ops = m.retired_thumb, m.retired_ops
+    result.final_regs = [m.x[regmap.rv(i)] for i in range(15)]
+    return result
+
+
 def run(images, stop: int, entry: int | None = None, max_steps: int = 2_000_000,
         history: int = 8) -> Result:
     """Run the model and the reference in lockstep from `entry` until pc == `stop`.
@@ -285,12 +321,7 @@ def run(images, stop: int, entry: int | None = None, max_steps: int = 2_000_000,
     `entry` defaults to the entry point of the first image.
     """
     layout = Layout.for_images(images)
-    m = Machine(thumb_regions=layout.thumb_regions, options=Options(exact_lr=True))
-    for base, size in layout.regions:
-        m.mem.map(base, size)
-    for img in images:
-        for seg in img.segments:
-            m.mem.write_bytes(seg.addr, seg.data)
+    m = _load_model(images, layout, Options(exact_lr=True))
     ref = Reference(layout, images)
     m.pc = ref.pc = (images[0].entry if entry is None else entry) & ~1
     stop &= ~1
@@ -338,6 +369,7 @@ def run(images, stop: int, entry: int | None = None, max_steps: int = 2_000_000,
                 result.stopped = "divergence"
                 break
     result.final_regs = [m.x[regmap.rv(i)] for i in range(15)]
+    result.model = m
     return result
 
 

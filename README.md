@@ -18,10 +18,10 @@ See [`architecture.puml`](architecture.puml) for the pipeline diagram and [`docs
 On Ubuntu 24.04:
 
 ```sh
-sudo apt-get install gcc-arm-none-eabi gcc-riscv64-unknown-elf
-make setup        # Python environment (needs uv)
+sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi gcc-riscv64-unknown-elf
+make setup        # submodules and Python environment (needs uv)
 make check-tools  # see what is installed
-make test
+make test         # make test-slow also runs the benchmarks in lockstep
 ```
 
 [`docs/setup.md`](docs/setup.md) covers installation and how to run, select and add tests. All dependencies are listed in [`docs/dependencies.md`](docs/dependencies.md).

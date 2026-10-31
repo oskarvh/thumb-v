@@ -1,11 +1,10 @@
 """Check the RV32 encoders against the GNU RISC-V assembler."""
 
-import shutil
 import subprocess
 
 import pytest
 
-from conftest import REQUIRE_TOOLS
+from conftest import require_tool
 from thumbv import rv32
 
 # (encoder output, assembly for the same instruction)
@@ -69,10 +68,7 @@ CASES = [
 
 def test_encoders_match_assembler(tmp_path):
     cc = "riscv64-unknown-elf-as"
-    if shutil.which(cc) is None:
-        if REQUIRE_TOOLS:
-            pytest.fail(f"{cc} not found")
-        pytest.skip(f"{cc} not found")
+    require_tool(cc)
     src = tmp_path / "enc.S"
     src.write_text(".option norvc\n.text\n" + "".join(f"{asm}\n" for _, asm in CASES))
     obj = tmp_path / "enc.o"

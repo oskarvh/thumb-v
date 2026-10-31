@@ -176,11 +176,17 @@ Goal: a software implementation of Thumb-V that runs real Thumb code correctly, 
 - Test programs: a Thumb-only C self-test (21,100 Thumb instructions, including 27 libgcc helpers: division, 64-bit shifts and multiply, soft-float, switch tables) and a mixed program (RISC-V `main` calling a Thumb library, with a callback into RISC-V; 20 switches between instruction sets). Both match the reference throughout.
 - First data point for D1: the self-test executes 5.4 RV32 ops per Thumb instruction under strategy A.
 
-**0.5 Test corpus: `tests/`**
-- Directed: one small assembly test per instruction class, including flag edge cases (`0x7FFFFFFF + 1`, `0 - 1`, `SBCS` with carry in/out, shifts by 0, 32 and >32).
-- Random: a generator for random straight-line Thumb sequences with valid memory operands.
-- Real code: CoreMark and a few Embench programs built for Cortex-M0.
-- Interworking: a RISC-V `main` calling Thumb functions with various signatures (0–8 arguments, 64-bit arguments, struct return, callbacks into RISC-V).
+**0.5 Test corpus: `tests/`** (done)
+
+Everything below runs in program lockstep unless noted, and all of it passes.
+
+- Directed (`tests/gen_directed.py`, `test_directed.py`): generated programs per instruction class with edge-case operands: all ALU ops over 15 edge values pairwise with varied carry-in, immediate and register shifts by 0/31/32/33/255/256 and more, every condition code against all 16 flag states, sign/zero-extending loads at every offset, push/pop/LDM/STM including the base-in-list cases, high registers and PC reads at both alignments, `ADD pc`/`MOV pc`/`BX`/`BLX`, byte reversal and extends, `MRS`/`MSR`. About 20,000 instructions.
+- Random (`tests/gen_random.py`, `test_random.py`): random instruction sequences whose state carries over (flags into `ADCS`/`SBCS` and branches, loads of earlier stores), with forward branches, push/pop pairs, LDM/STM and calls. 20 programs by default, 500 more with `--slow` (about 160,000 instructions).
+- Real code (`test_benchmarks.py`), built with newlib and libgcc for Cortex-M0:
+  - CoreMark (submodule, port in `tests/bench/coremark/`): one iteration with the standard performance seeds, 423,292 Thumb instructions; CoreMark's own CRC checks pass ("Correct operation validated"). Model-only by default, full lockstep with `--slow`.
+  - Embench IoT (submodule, run once each by setting `LOCAL_SCALE_FACTOR` to 1): all 19 benchmarks verify. The 4 smallest run in lockstep by default; the 11 mid-sized ones in lockstep and the 4 largest (0.7–4.3 million instructions) model-only with `--slow`.
+- Interworking (`tests/c/interwork_*.c`): RISC-V calling Thumb with 0–4 arguments, narrow types, pointers into the other side's data, a struct array, 64-bit results, a 4-argument callback into RISC-V, and recursion alternating between the instruction sets. Signatures that differ between the ABIs (5+ arguments, misaligned 64-bit arguments, structs by value) need thunks and move to 0.6.
+- ABI check (`test_mixed_matches_native`): each mixed program must give the same result as the same sources built all-RISC-V. The lockstep can't catch an ABI mismatch, because its reference hands registers over with the same mapping as the model; this check can, and it does flag a 5-argument call.
 
 **0.6 Interworking prototype → `docs/interworking.md`**
 - Write down the call rules, the jump-table layout and the build flow (D8).
@@ -270,8 +276,7 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 ## Immediate next actions
 
-Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep).
+Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus).
 
-1. Test corpus (0.5): directed tests, random instruction sequences, CoreMark and Embench. Larger C programs will need a C library (newlib for ARM, picolibc for RISC-V).
-2. Interworking prototype (0.6): the build flow and thunks for signatures that differ between the ABIs. The test fixture `build_mixed` is a first, minimal version of the build flow.
-3. Measurements (0.7).
+1. Interworking prototype (0.6): the build flow and thunks for signatures that differ between the ABIs. `thumbv.build.mixed_program` is a first, minimal version of the build flow, and `test_mixed_matches_native` is ready to check the thunks.
+2. Measurements (0.7): CoreMark and Embench now build and run, so the expansion ratios and instruction-mix questions (D1, Q3) can be answered.

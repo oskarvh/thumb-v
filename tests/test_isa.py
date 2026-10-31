@@ -1,13 +1,12 @@
 """Check the decode table against the coverage doc and the GNU ARM assembler."""
 
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from conftest import REQUIRE_TOOLS
+from conftest import require_tool
 from thumbv import isa
 
 DOC = Path(__file__).parents[1] / "docs" / "isa-coverage.md"
@@ -131,10 +130,7 @@ def test_examples_cover_table():
 
 def test_examples_decode_as_expected(tmp_path):
     cc = "arm-none-eabi-as"
-    if shutil.which(cc) is None:
-        if REQUIRE_TOOLS:
-            pytest.fail(f"{cc} not found")
-        pytest.skip(f"{cc} not found")
+    require_tool(cc)
     names = list(EXAMPLES)
     src = tmp_path / "ex.S"
     # A label after each example lets us find where each one starts.

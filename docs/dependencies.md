@@ -10,9 +10,9 @@ Everything Thumb-V depends on, including what later phases will need. Install in
 | uv | Python environment and lock file | Phase 0 | 0.11.8 | [astral.sh/uv](https://docs.astral.sh/uv/) | MIT / Apache-2.0 |
 | GNU Make | build entry points | Phase 0 | system | `build-essential` | GPL-3.0 |
 | arm-none-eabi-gcc + binutils | Thumb test programs, Cortex-M0 libraries and benchmarks | Phase 0 | 13.2.1 (13.2.rel1) | `gcc-arm-none-eabi` | GPL-3.0 with runtime exception |
-| newlib for ARM | C library for Cortex-M0 test programs | Phase 0.5 | 4.4.0 | `libnewlib-arm-none-eabi` (comes with the compiler) | BSD-style |
+| newlib for ARM | C library (string functions, libm, stub syscalls) for the Cortex-M0 benchmarks | Phase 0.5 | 4.4.0 | `libnewlib-arm-none-eabi` (install explicitly with `--no-install-recommends`) | BSD-style |
 | riscv64-unknown-elf-gcc + binutils | RV32 programs, firmware (`-march=rv32im -mabi=ilp32`; rv32e multilibs included) | Phase 0 | 13.2.0 | `gcc-riscv64-unknown-elf` | GPL-3.0 with runtime exception |
-| picolibc for RISC-V | C library for RV32 test programs and firmware | Phase 0.5 (not installed yet) | — | `picolibc-riscv64-unknown-elf` | BSD-style |
+| picolibc for RISC-V | C library for RV32 programs that need one (not needed so far: the RISC-V test programs are freestanding) | when needed | — | `picolibc-riscv64-unknown-elf` | BSD-style |
 | Verilator | RTL simulation | Phase 1 | — (Ubuntu ships 5.020) | `verilator` | LGPL-3.0 / Artistic-2.0 |
 | Java (JDK) | SpinalHDL / VexRiscv generation | Phase 1 | 21 installed; check which JDK VexRiscv's sbt version supports | `openjdk-17-jdk` if 21 fails | GPL-2.0 with classpath exception |
 | sbt | SpinalHDL / VexRiscv build | Phase 1 | — | [scala-sbt.org](https://www.scala-sbt.org/download) | Apache-2.0 |
@@ -45,8 +45,8 @@ Unicorn is GPL-2.0 while the project is Apache-2.0. That's fine for a developmen
 
 | Dependency | Used for | Needed from | License |
 |---|---|---|---|
-| CoreMark | correctness and expansion-ratio measurements, later board performance | Phase 0.5 | Apache-2.0 (with EEMBC reporting terms) |
-| Embench IoT | additional benchmark programs | Phase 0.5 | GPL-3.0 |
+| CoreMark | correctness and expansion-ratio measurements, later board performance. Submodule `third_party/coremark`, pinned at `1f483d5` | Phase 0.5 | Apache-2.0 (with EEMBC reporting terms) |
+| Embench IoT | additional benchmark programs. Submodule `third_party/embench-iot`, pinned at `09c2ed8`; only built and run, never modified or copied into the repo | Phase 0.5 | GPL-3.0 |
 | A prebuilt Cortex-M0 library (DSP or crypto) | real-world mixed-execution test | Phase 5 | not chosen |
 | FreeRTOS or Zephyr | RTOS with Thumb tasks | Phase 5 | MIT / Apache-2.0 |
 
