@@ -64,10 +64,10 @@ Matching registers covers most calls, but the two calling conventions still diff
 
 These are handled by **thunks** generated per imported function from its C prototype. Simple signatures (≤4 word-sized arguments) need none.
 
-Build flow (to be worked out in `docs/interworking.md`): the two halves can't be linked by one linker because they are different ELF machine types. Proposed approach:
-1. Link the Thumb part with `arm-none-eabi-ld` at a fixed address inside a Thumb region. Its imports (calls into RISC-V) go through a jump table at a known address.
-2. A tool reads both symbol tables, generates RISC-V-side stubs for the Thumb exports and fills the Thumb image's import table.
-3. The Thumb image is included in the final RISC-V ELF as a binary section.
+Build flow (decided, see [interworking.md](interworking.md)): the two halves can't be linked by one linker because they are different ELF machine types.
+1. Link the Thumb part with `arm-none-eabi-ld` first. Its imports (calls into RISC-V) resolve to slots of a jump table at a fixed address at the start of the RISC-V image.
+2. A generator reads the interface header and emits the jump table and the thunks; the RISC-V link gets the Thumb exports' addresses as absolute symbols.
+3. Both images are loaded side by side. (Combining them into one ELF file is a packaging step for later.)
 
 ### 4. Flags: fusion alone isn't safe, which argues for doing the hardware flags unit early
 
@@ -138,14 +138,14 @@ For the early phases, use on-chip M9K RAM (~66 KB on the 10CL025) and defer the 
 
 | # | Decision | Status |
 |---|---|---|
-| D1 | Flags strategy for the RTL | Open: decide after Phase 0 measurements, leaning towards hardware NZCV (C) |
+| D1 | Flags strategy for the RTL | Open: decide after Phase 0.7 measurements. Early indication from CoreMark (2026-10-31): with strategy A, 72% of all RV32 ops compute flags (compares alone are a third), giving 4.0 ops per Thumb instruction; a rough estimate with hardware NZCV (C) is 1.13. Strongly points to C; 0.7 confirms across all benchmarks and strategy B |
 | D2 | Register mapping | **Decided:** ABI-aligned mapping (section 1) |
 | D3 | When interrupts are taken | **Decided:** Thumb instruction boundaries only (section 6) |
 | D4 | Base core | Proposed: VexRiscv, confirmed by the Phase 1 code-reading spike. VexiiRiscv is the newer successor and worth a look. NEORV32 is the fallback. |
 | D5 | Where the expander lives | Proposed: a VexRiscv plugin or patch in SpinalHDL, since it must sit inside the fetch pipeline. Decide in Phase 1.3. |
 | D6 | SoC wrapper | Proposed: a minimal hand-written SoC around the core. LiteX for a first board smoke test only. |
 | D7 | Mode selection | **Decided:** programmable Thumb address regions (section 2). Number of regions and the CSR layout still open. |
-| D8 | Interworking build flow | Open: work out in `docs/interworking.md` during Phase 0 (section 3) |
+| D8 | Interworking build flow | **Decided:** link the Thumb side first; Thumb calls into RISC-V go through a jump table at a fixed address; RISC-V thunks are generated from an interface header only where the ABIs differ ([interworking.md](interworking.md)) |
 | D9 | Interrupt controller | **Decided:** one controller with the ARMv6-M NVIC programming model, shared by both instruction sets, with a shared RISC-V entry routine that calls handlers of either instruction set as ordinary functions (section 6). Hardware vectoring later. |
 
 ## Phase 0: Specification and golden model (software only)
@@ -188,9 +188,11 @@ Everything below runs in program lockstep unless noted, and all of it passes.
 - Interworking (`tests/c/interwork_*.c`): RISC-V calling Thumb with 0–4 arguments, narrow types, pointers into the other side's data, a struct array, 64-bit results, a 4-argument callback into RISC-V, and recursion alternating between the instruction sets. Signatures that differ between the ABIs (5+ arguments, misaligned 64-bit arguments, structs by value) need thunks and move to 0.6.
 - ABI check (`test_mixed_matches_native`): each mixed program must give the same result as the same sources built all-RISC-V. The lockstep can't catch an ABI mismatch, because its reference hands registers over with the same mapping as the model; this check can, and it does flag a 5-argument call.
 
-**0.6 Interworking prototype → `docs/interworking.md`**
-- Write down the call rules, the jump-table layout and the build flow (D8).
-- A first thunk generator, `tools/thunkgen`, driven by C prototypes, exercised by the interworking tests in the model.
+**0.6 Interworking prototype → `docs/interworking.md`** (done)
+- Call rules, the jump-table layout and the build flow are in [interworking.md](interworking.md) (D8).
+- `model/thumbv/interwork.py` (instead of the planned `tools/thunkgen`, so the build recipes can import it): parses an interface header (C prototypes tagged `THUMBV_THUMB`/`THUMBV_RISCV`), computes both ABIs' layouts, and generates RISC-V thunks only where they differ. `python -m thumbv.interwork header.h` reports how each function crosses.
+- Thumb code calls RISC-V functions by name through a jump table at a fixed address, so the Thumb library is linked first and there's no circular dependency between the links.
+- Checked by building the ABI test program three ways (mixed with thunks, all-RISC-V, all-Thumb) and requiring equal results, by program lockstep of the mixed build, and by a mutant layout.
 
 **0.7 Measurement**
 - Dynamic expansion ratio (RV ops retired per Thumb instruction retired) for CoreMark/Embench under strategies A, B and C. Also: how often flags are dead, how often `CMP`+`B<cond>` is fusable, how often `BL` exceeds ±1 MiB, and how often register shifts run, split into integer and soft-float code (Q3).
@@ -276,7 +278,6 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 ## Immediate next actions
 
-Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus).
+Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking).
 
-1. Interworking prototype (0.6): the build flow and thunks for signatures that differ between the ABIs. `thumbv.build.mixed_program` is a first, minimal version of the build flow, and `test_mixed_matches_native` is ready to check the thunks.
-2. Measurements (0.7): CoreMark and Embench now build and run, so the expansion ratios and instruction-mix questions (D1, Q3) can be answered.
+1. Measurements (0.7): expansion ratios for strategies A, B and C over CoreMark and Embench, dead flags, fusable compares, register shifts (D1, Q3).

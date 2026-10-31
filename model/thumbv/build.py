@@ -7,6 +7,7 @@ Memory layout of the programs (see tests/link/):
   Thumb programs        code 0x0001_0000, data 0x2000_0000 (48 KiB)
   Thumb libraries       code 0x0001_0000, data 0x2000_0000 (16 KiB)   for mixed programs
   RV32 programs         code 0x0002_0000, data 0x2000_4000 (16 KiB)
+                        the import jump table for Thumb code first, at IMPORT_BASE
   Stack                 top at 0x2001_0000, shared
 """
 
@@ -15,7 +16,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import elf
+from . import elf, interwork
 
 REPO = Path(__file__).resolve().parents[2]
 C_DIR = REPO / "tests" / "c"
@@ -23,6 +24,8 @@ LINK_DIR = REPO / "tests" / "link"
 BENCH_DIR = REPO / "tests" / "bench"
 COREMARK = REPO / "third_party" / "coremark"
 EMBENCH = REPO / "third_party" / "embench-iot"
+
+IMPORT_BASE = 0x0002_0000  # start of RV32 ROM, see tests/link/rv32.ld
 
 TOOLCHAINS = {
     "thumb": ("arm-none-eabi-gcc", ["-mcpu=cortex-m0", "-mthumb"]),
@@ -68,22 +71,46 @@ def thumb_asm_program(source: Path, out: Path) -> Path:
     return compile_and_link("thumb", [source], out, [_linker_script("thumb.ld")])
 
 
-def mixed_program(thumb_names, rv_names, out_dir: Path) -> tuple[Path, Path]:
+def mixed_program(thumb_names, rv_names, out_dir: Path, interface: str | None = None) -> tuple[Path, Path]:
     """A Thumb library from tests/c/, then a RISC-V program linked against it.
 
-    The library's global functions become absolute symbols in the RISC-V link.
-    Reserved names (`__aeabi_idiv`, `__divsi3`, ...) stay private: they are the
-    Thumb side's libgcc, and RISC-V's libgcc has functions of the same names.
-    Returns (rv_elf, thumb_elf).
+    Without an interface header, the library's global functions become
+    absolute symbols in the RISC-V link, and calls must have signatures that
+    both ABIs pass the same way. Reserved names (`__aeabi_idiv`, `__divsi3`,
+    ...) stay private: they are the Thumb side's libgcc, and RISC-V's libgcc
+    has functions of the same names.
+
+    With an interface header (from tests/c/, see thumbv/interwork.py), only the
+    declared functions cross: thunks are generated where the ABIs differ, and
+    Thumb code can call the declared RISC-V functions by name through the
+    import jump table. Returns (rv_elf, thumb_elf).
     """
+    thumb_sources = [C_DIR / n for n in thumb_names]
+    rv_sources = [C_DIR / "crt_rv32.S", *(C_DIR / n for n in rv_names)]
+    gen = None
+    if interface:
+        gen = interwork.generate(interwork.parse((C_DIR / interface).read_text()), IMPORT_BASE)
+        (out_dir / "interwork_thumb.S").write_text(gen.thumb_asm)
+        (out_dir / "interwork_rv32.S").write_text(gen.rv_asm)
+        thumb_sources.append(out_dir / "interwork_thumb.S")
+        rv_sources.append(out_dir / "interwork_rv32.S")
+
     thumb = compile_and_link(
-        "thumb", [C_DIR / n for n in thumb_names], out_dir / "lib_thumb.elf",
+        "thumb", thumb_sources, out_dir / "lib_thumb.elf",
         [*C_FLAGS["thumb"], _linker_script("thumb_lib.ld"), "-Wl,--entry=0"], ["-lgcc"])
-    defsyms = [f"-Wl,--defsym={name}={value & ~1:#x}"
-               for name, value in elf.load(thumb).functions.items() if not name.startswith("__")]
+    functions = elf.load(thumb).functions
+    if gen:
+        exports = {gen.export_symbols[name]: functions[name] for name in gen.export_symbols}
+    else:
+        exports = {name: value for name, value in functions.items() if not name.startswith("__")}
+    defsyms = [f"-Wl,--defsym={name}={value & ~1:#x}" for name, value in exports.items()]
     rv = compile_and_link(
-        "rv32", [C_DIR / "crt_rv32.S", *(C_DIR / n for n in rv_names)], out_dir / "main_rv32.elf",
+        "rv32", rv_sources, out_dir / "main_rv32.elf",
         [*C_FLAGS["rv32"], _linker_script("rv32.ld"), *defsyms], ["-lgcc"])
+    if gen:  # the Thumb side was linked against the table's slots at IMPORT_BASE
+        table = elf.load(rv).symbols.get("__thumbv_imports")
+        if table != IMPORT_BASE:
+            raise RuntimeError(f"import table at {table}, expected {IMPORT_BASE:#x}: check rv32.ld")
     return rv, thumb
 
 

@@ -11,6 +11,9 @@ __stack_top = 0x20010000;
 
 SECTIONS
 {
+    /* The import jump table for Thumb code comes first, at a fixed address
+       (thumbv.build.IMPORT_BASE), so the Thumb side can be linked first. */
+    .imports : { KEEP(*(.thumbv.imports)) } > ROM
     .text : { KEEP(*(.text.start)) *(.text .text.*) *(.rodata .rodata.* .srodata .srodata.*) } > ROM
     .data : { *(.data .data.* .sdata .sdata.*) } > RAM
     .bss  : { *(.bss .bss.* .sbss .sbss.* COMMON) } > RAM

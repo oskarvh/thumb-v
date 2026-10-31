@@ -261,10 +261,27 @@ def describe(machine: Machine, layout: Layout, pc: int) -> str:
 
 
 def _model_flags(m):
-    return m.x[regmap.FN] << 3 | m.x[regmap.FZ] << 2 | m.x[regmap.FC] << 1 | m.x[regmap.FV]
+    """NZCV from the model's flag registers. After RISC-V code ran they may hold
+    any value, not just 0/1; the expansions treat non-zero as set."""
+    return sum(bit for reg, bit in _FLAG_BITS.items() if m.x[reg])
 
 
-def _compare(m, ref, thumb_step):
+_FLAG_BITS = {regmap.FN: 8, regmap.FZ: 4, regmap.FC: 2, regmap.FV: 1}
+_WRITES_RD = {0x37, 0x17, 0x6F, 0x67, 0x13, 0x33, 0x03, 0x73}  # opcodes with a destination register
+
+
+def _flags_written(m, pc):
+    """NZCV bits the Thumb instruction at pc writes: ops whose destination is a flag register."""
+    hw1 = m.mem.read(pc, 2)
+    hw2 = m.mem.read(pc + 2, 2) if isa.is_32bit(hw1) else 0
+    mask = 0
+    for op in expand(hw1, hw2, pc, m.options).ops:
+        if op & 0x7F in _WRITES_RD:
+            mask |= _FLAG_BITS.get((op >> 7) & 0x1F, 0)
+    return mask
+
+
+def _compare(m, ref, flags_defined):
     problems = []
     if m.pc & ~1 != ref.pc & ~1:
         problems.append(f"next PC: reference {ref.pc:#010x}, model {m.pc:#010x}")
@@ -275,8 +292,9 @@ def _compare(m, ref, thumb_step):
     for x in PRESERVED:
         if ref.rv.x[x] != m.x[x]:
             problems.append(f"x{x}: reference {ref.rv.x[x]:#010x}, model {m.x[x]:#010x}")
-    if thumb_step and ref.flags != _model_flags(m):
-        problems.append(f"NZCV: reference {ref.flags:04b}, model {_model_flags(m):04b}")
+    want, got = ref.flags & flags_defined, _model_flags(m) & flags_defined
+    if want != got:
+        problems.append(f"NZCV: reference {want:04b}, model {got:04b} (comparing {flags_defined:04b})")
     if sorted(ref.writes) != sorted(m.mem.log):
         fmt = lambda ws: ", ".join(f"[{a:#x}]{s}={v:#x}" for a, s, v in sorted(ws)) or "none"
         problems.append(f"writes: reference {fmt(ref.writes)}; model {fmt(m.mem.log)}")
@@ -328,12 +346,23 @@ def run(images, stop: int, entry: int | None = None, max_steps: int = 2_000_000,
 
     result = Result()
     recent = deque(maxlen=history)
+    # Flags are compared once defined: from the start of a Thumb program (both
+    # sides start at zero), or after Thumb code entered from RISC-V writes them
+    # (they are UNKNOWN after a call).
+    in_thumb = layout.in_thumb(m.pc)
+    flags_defined = 0xF if in_thumb else 0
     while result.steps < max_steps:
         if m.pc == stop:
             result.stopped = "stop address"
             break
         pc, thumb_step = m.pc, layout.in_thumb(m.pc)
+        if thumb_step and not in_thumb:
+            flags_defined = 0
+        in_thumb = thumb_step
         text = describe(m, layout, pc)
+        flags_before = _model_flags(m)
+        if thumb_step:
+            flags_defined |= _flags_written(m, pc)
         m.mem.log = []
         ref.writes.clear()
         ops_before = m.retired_ops
@@ -344,7 +373,7 @@ def run(images, stop: int, entry: int | None = None, max_steps: int = 2_000_000,
             result.divergence = Divergence(result.steps, pc, text, [result.stopped], list(recent))
             break
         try:
-            ref.step(_model_flags(m))
+            ref.step(flags_before)
         except (ReferenceFault, Trap) as fault:
             result.stopped = f"reference fault: {fault}"
             result.divergence = Divergence(result.steps, pc, text, [result.stopped], list(recent))
@@ -352,7 +381,7 @@ def run(images, stop: int, entry: int | None = None, max_steps: int = 2_000_000,
         result.steps += 1
         result.thumb_steps += thumb_step
         result.rv_ops += m.retired_ops - ops_before
-        problems = _compare(m, ref, thumb_step)
+        problems = _compare(m, ref, flags_defined if thumb_step else 0)
         if problems:
             result.divergence = Divergence(result.steps, pc, text, problems, list(recent))
             result.stopped = "divergence"

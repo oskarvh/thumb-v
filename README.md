@@ -51,7 +51,7 @@ ARM registers sit in the RISC-V registers with the same role in both calling con
 | — | t1–t6, a4–a7 | expander temporaries and flag state |
 | — | x3, x4 (gp, tp), s8–s11 | never touched by Thumb code |
 
-Calls whose signatures differ between the ABIs (more than 4 arguments, 64-bit arguments, structs, varargs) go through generated thunks.
+Calls whose signatures differ between the ABIs (more than 4 arguments, misaligned 64-bit arguments, structs by value) go through RISC-V thunks generated from an interface header; Thumb code calls RISC-V functions through a jump table. See [`docs/interworking.md`](docs/interworking.md).
 
 ## Instruction mapping (RV32IM)
 
