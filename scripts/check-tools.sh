@@ -24,6 +24,7 @@ echo "Phase 1 (make core):"
 check later   java                    "SpinalHDL / VexRiscv"
 check later   sbt                     "SpinalHDL / VexRiscv"
 check later   verilator               "linting and RTL simulation"
+check optional gtkwave                "viewing waveforms (or Surfer)"
 
 echo "Board (optional for now):"
 check later   openFPGALoader          "programming the CYC1000"

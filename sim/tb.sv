@@ -5,6 +5,7 @@
 //   +data=<file>    $readmemh image for the data RAM
 //   +trace=<file>   write one line per retired instruction (RVFI), see below
 //   +cycles=<n>     give up after n cycles (default 10,000,000)
+//   +wave=<file>    dump every signal to an FST waveform (GTKWave, Surfer)
 //
 // The UART line is decoded here and printed to stdout. The run ends when the
 // core retires `j .` (0x0000006f), the loop the startup code spins in at
@@ -29,7 +30,7 @@ module tb;
     thumbv_soc #(.UART_CLKS_PER_BIT(CLKS_PER_BIT)) dut (
         .clk(clk), .reset(reset), .uart_tx(uart_tx), .leds(leds));
 
-    string code_file, data_file, trace_file;
+    string code_file, data_file, trace_file, wave_file;
     longint max_cycles = 10_000_000;
     longint cycles = 0;
     longint retired = 0;
@@ -44,6 +45,10 @@ module tb;
             $readmemh(data_file, dut.data_ram.mem);
         if ($value$plusargs("trace=%s", trace_file))
             trace_fd = $fopen(trace_file, "w");
+        if ($value$plusargs("wave=%s", wave_file)) begin
+            $dumpfile(wave_file);
+            $dumpvars(0, tb);
+        end
         void'($value$plusargs("cycles=%d", max_cycles));
         repeat (4) @(posedge clk);
         reset = 0;

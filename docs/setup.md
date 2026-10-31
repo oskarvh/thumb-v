@@ -148,7 +148,14 @@ To run a RISC-V program on the SoC in Verilator, in lockstep with the model (the
 uv run python -m thumbv.rtlsim build/pytest/<test>/hello.elf
 ```
 
-See [soc.md](soc.md) for the memory map, the testbench and the lockstep.
+To look at waveforms, install a viewer (`sudo apt-get install gtkwave`, or [Surfer](https://surfer-project.org/)) and add `--wave`:
+
+```sh
+uv run python -m thumbv.rtlsim build/pytest/<test>/hello.elf --wave build/sim/hello.fst
+gtkwave build/sim/hello.fst
+```
+
+See [soc.md](soc.md) for the memory map, the testbench, the waveforms and the lockstep.
 
 Later:
 - **Quartus Prime Lite** for the Cyclone 10 LP, from Intel's website.

@@ -9,7 +9,7 @@ register write, the same bytes stored.
 Loads from I/O registers (the UART status) are inputs from the outside world:
 the model reads whatever the RTL read.
 
-    python -m thumbv.rtlsim program.elf [--trace out.txt]
+    python -m thumbv.rtlsim program.elf [--wave out.fst]
 """
 
 import argparse
@@ -48,7 +48,9 @@ def simulator() -> Path:
         subprocess.run(["make", "-C", str(REPO), "core"], check=True, capture_output=True)
     if not SIMULATOR.exists() or SIMULATOR.stat().st_mtime < max(s.stat().st_mtime for s in SOURCES):
         SIM_DIR.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["verilator", "--binary", "--timing", "-j", "0", "--top-module", "tb",
+        # Tracing is compiled in (about 8% slower even when not dumping) so that
+        # +wave works without a second build.
+        subprocess.run(["verilator", "--binary", "--timing", "--trace-fst", "-j", "0", "--top-module", "tb",
                         "-o", "tb", *map(str, SOURCES)], cwd=SIM_DIR, check=True, capture_output=True)
     return SIMULATOR
 
@@ -103,14 +105,17 @@ class Result:
     trace: list[Retired] = field(default_factory=list)
 
 
-def run(images, out_dir: Path, max_cycles: int = 10_000_000, trace: bool = True) -> Result:
-    """Run a program on the SoC in Verilator."""
+def run(images, out_dir: Path, max_cycles: int = 10_000_000, trace: bool = True,
+        wave: Path | None = None) -> Result:
+    """Run a program on the SoC in Verilator; `wave` names an FST waveform file to write."""
     sim = simulator()
     code, data = memory_images(images, out_dir)
     trace_path = out_dir / "trace.txt"
     args = [str(sim), f"+code={code}", f"+data={data}", f"+cycles={max_cycles}"]
     if trace:
         args.append(f"+trace={trace_path}")
+    if wave:
+        args.append(f"+wave={wave}")
     out = subprocess.run(args, check=True, capture_output=True, text=True).stdout
     lines = [l for l in out.splitlines(keepends=True) if not l.startswith("- ")]  # Verilator's $finish note
     status, a0, cycles, instructions = lines[-1].split()
@@ -167,15 +172,18 @@ def main(argv=None):
     parser.add_argument("elf", nargs="+", type=Path)
     parser.add_argument("--cycles", type=int, default=10_000_000)
     parser.add_argument("--out", type=Path, default=SIM_DIR / "run", help="where to put hex files and trace")
+    parser.add_argument("--wave", type=Path, help="write an FST waveform of every signal to this file")
     args = parser.parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=True)
     images = [elf.load(p) for p in args.elf]
-    result = run(images, args.out, args.cycles)
-    sys.stdout.write(result.uart)
-    print(f"\n{result.status}: a0 = {result.a0:#x}, {result.instructions} instructions "
+    result = run(images, args.out, args.cycles, wave=args.wave)
+    sys.stdout.write(result.uart if result.uart.endswith("\n") or not result.uart else result.uart + "\n")
+    print(f"{result.status}: a0 = {result.a0:#x}, {result.instructions} instructions "
           f"in {result.cycles} cycles (CPI {result.cycles / max(1, result.instructions):.2f})")
     divergence = lockstep(images, result)
     print(divergence if divergence else f"lockstep: {len(result.trace)} instructions match the model")
+    if args.wave:
+        print(f"waveform: {args.wave}")
     return 0 if result.status == EXIT and divergence is None else 1
 
 

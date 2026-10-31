@@ -37,7 +37,22 @@ The 256 KiB code RAM fits in simulation only: the 10CL025 has about 66 KB of blo
 - **Loading:** it loads the RAMs from `$readmemh` files.
 - **UART:** it decodes the UART line back into characters and prints them.
 - **Trace:** it logs every retired instruction from the core's RVFI port (VexRiscv's `FormalPlugin`).
+- **Waveforms:** `+wave=<file>` dumps every signal to an FST file, for GTKWave or Surfer. See [Waveforms](#waveforms).
 - **Stopping:** the run ends when the core retires `j .`, the loop the startup code spins in at `done`. The testbench waits for the UART to finish its last byte, then prints `EXIT <a0> <cycles> <instructions>`. If the cycle limit is reached first, it prints `TIMEOUT`.
+
+## Waveforms
+
+`--wave` writes an FST waveform of the whole SoC:
+
+```sh
+uv run python -m thumbv.rtlsim build/hello.elf --wave build/sim/hello.fst
+gtkwave build/sim/hello.fst      # or: surfer build/sim/hello.fst
+```
+
+- **Hierarchy:** `TOP.tb` is the testbench (Verilator adds `TOP`), `TOP.tb.dut` the SoC, and `TOP.tb.dut.cpu` the core.
+- **Signal names:** the core's signals are named after their pipeline stage (`decode_`, `execute_`, `memory_`, `writeBack_`, for example `execute_PC` and `execute_INSTRUCTION`), so one instruction can be followed down the pipeline. The bus signals are `iBus_*` and `dBus_*`, and the retire trace is `rvfi_*`.
+- **Not dumped:** the RAM contents. Verilator leaves out arrays larger than 32 entries; the RAM ports are there.
+- **Cost:** tracing is always compiled in, which makes runs about 8% slower even when not dumping. Dumping itself is slower still, and only happens with `--wave`.
 
 ## Lockstep against the model
 

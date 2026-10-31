@@ -11,8 +11,8 @@ import pytest
 from thumbv import elf, lockstep, rtlsim
 
 
-def run(images, tmp_path):
-    result = rtlsim.run(images, tmp_path)
+def run(images, tmp_path, **kwargs):
+    result = rtlsim.run(images, tmp_path, **kwargs)
     assert result.status == rtlsim.EXIT, result.uart
     return result
 
@@ -48,6 +48,13 @@ def test_lockstep_catches_a_wrong_write(rtl_simulator, build_c, tmp_path):
     divergence = rtlsim.lockstep([image], result)
     assert divergence is not None and divergence.step == i
     assert f"x{result.trace[i].rd}: model" in divergence.problems[0]
+
+
+def test_wave(rtl_simulator, build_c, tmp_path):
+    image = elf.load(build_c("rv32", "hello.c"))
+    wave = tmp_path / "hello.fst"
+    run([image], tmp_path, wave=wave)
+    assert wave.stat().st_size > 1000
 
 
 def test_timeout(rtl_simulator, build_c, tmp_path):

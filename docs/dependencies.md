@@ -14,6 +14,7 @@ Everything Thumb-V depends on, including what later phases will need. Install in
 | riscv64-unknown-elf-gcc + binutils | RV32 programs, firmware (`-march=rv32im -mabi=ilp32`; rv32e multilibs included) | Phase 0 | 13.2.0 | `gcc-riscv64-unknown-elf` | GPL-3.0 with runtime exception |
 | picolibc for RISC-V | C library for RV32 programs that need one (not needed so far: the RISC-V test programs are freestanding) | when needed | — | `picolibc-riscv64-unknown-elf` | BSD-style |
 | Verilator | linting the generated core, RTL simulation | Phase 1 | 5.020 | `verilator` | LGPL-3.0 / Artistic-2.0 |
+| GTKWave or Surfer (optional) | viewing waveforms from `rtlsim --wave` | Phase 1 | — | `gtkwave`; Surfer from [surfer-project.org](https://surfer-project.org/) | GPL-2.0; EUPL-1.2 |
 | Java (JDK) | SpinalHDL / VexRiscv generation | Phase 1 | OpenJDK 21 | `openjdk-21-jdk` | GPL-2.0 with classpath exception |
 | sbt | SpinalHDL / VexRiscv build. `rtl/core` pins sbt 1.10.7 (downloaded by the launcher) and Scala 2.12.18, VexRiscv's | Phase 1 | launcher 2.0.12 | sbt's apt repository, see setup.md | Apache-2.0 |
 | Quartus Prime Lite | synthesis for the Cyclone 10 LP | Phase 1.4 | — | Intel download | proprietary, free |
