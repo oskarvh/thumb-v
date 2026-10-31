@@ -74,11 +74,16 @@ Calls whose signatures differ between the ABIs (more than 4 arguments, misaligne
 
 ## Flags (NZCV)
 
-Nearly every 16-bit Thumb data-processing instruction sets flags, so flag handling decides performance. Code after a branch may read flags set before it, so fusing `CMP` + `B<cond>` doesn't by itself make the flags dead. Three strategies are being compared on real compiled code before choosing one for the RTL:
+Nearly every 16-bit Thumb data-processing instruction sets flags, so flag handling decides performance. Three strategies were compared on CoreMark, Embench and soft-float code ([`docs/flags-decision.md`](docs/flags-decision.md)), in RV32 ops per Thumb instruction:
 
-1. **Eager software flags:** compute NZCV after every flag-setting instruction.
-2. **Lazy flags:** record the operation and operands, and compute flags only when read.
-3. **Hardware flags unit:** latch NZCV from the ALU and add a custom branch-on-condition instruction.
+| Strategy | Ops per Thumb instruction |
+|---|---:|
+| **Eager software flags:** compute NZCV after every flag-setting instruction | 3.92 (2.34 with a 4-instruction lookahead that skips dead flags) |
+| **Lazy flags:** record the operation and operands, and compute flags only when read | 2.67 |
+| **Hardware flags unit:** latch NZCV from the ALU, plus a branch-on-condition op | 1.25 |
+| Hardware flags unit with fused `CMP` + `B<cond>` and an ARM-shift micro-op | 1.03 |
+
+71% of flag-setting instructions never have their flags read, but hardware can't see that cheaply, so the proposal is the hardware flags unit. Eager flags stay in the software model as the reference.
 
 ## Interrupts and exceptions
 

@@ -81,6 +81,8 @@ Build flow (decided, see [interworking.md](interworking.md)): the two halves can
 
 A and B both make the expander more complicated (lookahead buffers, fusion logic, sequences for every ADDS/SUBS), and that work is thrown away once C exists. **Recommendation:** implement A in the software model only, as the reference. Use the Phase 0 measurements to decide whether the RTL goes straight to C. With C, NZCV is a CSR that an RTOS saves on a context switch away from a Thumb task.
 
+**Measured in 0.7** ([flags-decision.md](flags-decision.md)): A costs 3.92 RV32 ops per Thumb instruction, B 2.67 (the estimate above was too low: saving operands on every write costs about as much as computing N and Z), and C 1.25. A with even a perfect dead-flag elimination (1.47) loses to C.
+
 ### 5. Thumb-specific details the expander must handle
 
 - **Instruction length.** In Thumb regions the fetch aligner must use the Thumb length rule (`hw[15:11]` ∈ {`11101`, `11110`, `11111`} → 32-bit), not the RVC rule. ARMv6-M's 32-bit instructions are `BL`, `MSR`, `MRS`, `DSB`, `DMB` and `ISB`.
@@ -138,7 +140,7 @@ For the early phases, use on-chip M9K RAM (~66 KB on the 10CL025) and defer the 
 
 | # | Decision | Status |
 |---|---|---|
-| D1 | Flags strategy for the RTL | Open: decide after Phase 0.7 measurements. Early indication from CoreMark (2026-10-31): with strategy A, 72% of all RV32 ops compute flags (compares alone are a third), giving 4.0 ops per Thumb instruction; a rough estimate with hardware NZCV (C) is 1.13. Strongly points to C; 0.7 confirms across all benchmarks and strategy B |
+| D1 | Flags strategy for the RTL | **Proposed after the 0.7 measurements, awaiting OK:** C, a hardware NZCV unit, then the ARM-shift micro-op (Q3), then fused `CMP` + `B<cond>`. Over 21 programs: A 3.92 RV32 ops per Thumb instruction, the best realisable A variant 2.34, B 2.67, C 1.25, C with both additions 1.03 ([flags-decision.md](flags-decision.md)) |
 | D2 | Register mapping | **Decided:** ABI-aligned mapping (section 1) |
 | D3 | When interrupts are taken | **Decided:** Thumb instruction boundaries only (section 6) |
 | D4 | Base core | Proposed: VexRiscv, confirmed by the Phase 1 code-reading spike. VexiiRiscv is the newer successor and worth a look. NEORV32 is the fallback. |
@@ -194,9 +196,10 @@ Everything below runs in program lockstep unless noted, and all of it passes.
 - Thumb code calls RISC-V functions by name through a jump table at a fixed address, so the Thumb library is linked first and there's no circular dependency between the links.
 - Checked by building the ABI test program three ways (mixed with thunks, all-RISC-V, all-Thumb) and requiring equal results, by program lockstep of the mixed build, and by a mutant layout.
 
-**0.7 Measurement**
-- Dynamic expansion ratio (RV ops retired per Thumb instruction retired) for CoreMark/Embench under strategies A, B and C. Also: how often flags are dead, how often `CMP`+`B<cond>` is fusable, how often `BL` exceeds ±1 MiB, and how often register shifts run, split into integer and soft-float code (Q3).
-- Write the results and the D1 decision into `docs/flags-decision.md`.
+**0.7 Measurement → `docs/flags-decision.md`** (done)
+- `model/thumbv/measure.py` (`make measure`) traces CoreMark, all of Embench and a soft-float workload (`tests/bench/float/`) in the model. It follows every flag write to its reads, and costs strategies A, A with a k-instruction lookahead, A with perfect dead-flag elimination, B and C (plus fusion and the ARM-shift micro-op) from the trace.
+- Results: 71% of flag-setting instructions have no flag read; strategy A spends 69% of its ops on flags; C costs 1.25 ops per Thumb instruction against A's 3.92. 90% of `B<cond>` are fusable with the preceding `CMP`. No `BL` needs the long form. Register shifts are 0.9% of instructions (up to 8.5% in SHA-256), 95% of them in integer code.
+- Proposed: D1 = C, Q3 = ARM-shift micro-op. See [flags-decision.md](flags-decision.md).
 
 **Exit criteria:** every ARMv6-M instruction is modelled; directed and random tests pass lockstep against Unicorn; CoreMark built for Cortex-M0 completes with the correct CRC; a RISC-V program calls Thumb library functions (and is called back) correctly in the model; D1 and D8 are decided.
 
@@ -278,6 +281,7 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 ## Immediate next actions
 
-Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking).
+Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-1. Measurements (0.7): expansion ratios for strategies A, B and C over CoreMark and Embench, dead flags, fusable compares, register shifts (D1, Q3).
+1. Confirm D1 (hardware NZCV) and Q3 (ARM-shift micro-op) from [flags-decision.md](flags-decision.md). That closes Phase 0's exit criteria.
+2. Phase 1.1: build VexRiscv in a fixed RV32IMC configuration, pinned as a submodule.

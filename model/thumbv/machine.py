@@ -80,6 +80,7 @@ class Machine:
         self.options = options
         self.retired_thumb = 0   # Thumb instructions completed
         self.retired_ops = 0     # RV32 ops executed, native or expanded
+        self._expansions = {}    # (pc, hw1, hw2) -> Expansion; expand() is a pure function
 
     def in_thumb(self, addr: int) -> bool:
         return any(base <= addr < limit for base, limit in self.thumb_regions)
@@ -90,7 +91,10 @@ class Machine:
         if self.in_thumb(pc):
             hw1 = self.mem.read(pc, 2)
             hw2 = self.mem.read(pc + 2, 2) if expander.isa.is_32bit(hw1) else 0
-            exp = expander.expand(hw1, hw2, pc, self.options)
+            key = (pc, hw1, hw2)
+            exp = self._expansions.get(key)
+            if exp is None:
+                exp = self._expansions[key] = expander.expand(hw1, hw2, pc, self.options)
             for i, op in enumerate(exp.ops):
                 target = self.execute(op, pc, link=pc + exp.length)
                 if target is not None:

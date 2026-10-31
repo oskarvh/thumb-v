@@ -46,11 +46,12 @@ class ToolMissing(Exception):
 
 
 def compile_and_link(kind: str, sources, out: Path, extra=(), libs=()) -> Path:
+    """Compile and link `sources` into `out`, with a link map next to it (`out` + ".map")."""
     cc, arch_flags = TOOLCHAINS[kind]
     if shutil.which(cc) is None:
         raise ToolMissing(cc)
-    subprocess.run([cc, *arch_flags, "-nostdlib", *extra, "-o", str(out), *map(str, sources), *libs],
-                   check=True)
+    subprocess.run([cc, *arch_flags, "-nostdlib", *extra, f"-Wl,-Map={out}.map", "-o", str(out),
+                    *map(str, sources), *libs], check=True)
     return out
 
 
@@ -134,6 +135,17 @@ def coremark(out_dir: Path, iterations: int = 1) -> Path:
     flags = ["-O2", f"-I{port}", f"-I{COREMARK}", f"-DITERATIONS={iterations}",
              '-DFLAGS_STR="-O2"', _linker_script("thumb.ld")]
     return compile_and_link("thumb", sources, out_dir / "coremark.elf", flags, NEWLIB)
+
+
+def float_kernels(out_dir: Path) -> Path:
+    """Soft-float kernels (tests/bench/float/): libgcc's float and double routines and libm.
+
+    Embench IoT 2 is integer-only, so this is the measurements' float workload.
+    main() returns a checksum of the results.
+    """
+    sources = [C_DIR / "crt_thumb.S", BENCH_DIR / "float" / "float_kernels.c"]
+    flags = ["-O2", "-fno-builtin", _linker_script("thumb.ld")]
+    return compile_and_link("thumb", sources, out_dir / "float_kernels.elf", flags, NEWLIB)
 
 
 def embench_names() -> list[str]:

@@ -89,10 +89,11 @@ def build_mixed(tmp_path):
 
 @pytest.fixture
 def build_bench(tmp_path):
-    """Build benchmarks: build_bench.coremark() or build_bench.embench(name)."""
+    """Build benchmarks: build_bench.coremark(), .embench(name) or .float_kernels()."""
 
     class Bench:
         coremark = staticmethod(_tools(lambda **kw: build.coremark(tmp_path, **kw)))
         embench = staticmethod(_tools(lambda name: build.embench(name, tmp_path)))
+        float_kernels = staticmethod(_tools(lambda: build.float_kernels(tmp_path)))
 
     return Bench

@@ -1,4 +1,4 @@
-"""CoreMark and Embench IoT built for Cortex-M0, in the model and in lockstep.
+"""CoreMark, Embench IoT and the soft-float kernels built for Cortex-M0, in the model and in lockstep.
 
 CoreMark checks its own results (list, matrix and state CRCs for the standard
 seeds); Embench benchmarks verify their result and main() returns 0. Lockstep
@@ -54,6 +54,13 @@ def test_embench_lockstep_small(build_bench, name):
 def test_embench_lockstep(build_bench, name):
     image = elf.load(build_bench.embench(name))
     check_embench(lockstep.run([image], stop=image.symbols["done"]), name)
+
+
+@pytest.mark.slow
+def test_float_kernels_lockstep(build_bench):
+    image = elf.load(build_bench.float_kernels())
+    result = lockstep.run([image], stop=image.symbols["done"], max_steps=1_000_000)
+    assert result.ok, f"{result.stopped}\n{result.divergence}"
 
 
 @pytest.mark.slow
