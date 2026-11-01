@@ -308,7 +308,14 @@ Goal: every Thumb instruction that doesn't need the flags runs in hardware, howe
      - The 3.1 instructions pass the exhaustive check op by op, and op 0 never depends on the PC's alignment.
      - An assembled Thumb function of 3.1 instructions runs on the RTL in lockstep with the model, op by op. It covers `LDR` literal at both alignments, `ADR`, all eight register-offset loads and stores, `BICS`, the extends, the PC as an operand, and `ADD pc, rm`.
      - Cost: about 1,100 LEs (5,038 in all), Fmax 38.9 MHz. The expander in decode is now on the path into execute.
-2. **Register lists:** `PUSH`, `POP` (including `POP {pc}`), `LDM`, `STM`. Op `k` needs the `k`-th register in the list, a priority encoder over the list with the first `k` registers masked.
+2. **Register lists:** `PUSH`, `POP` (including `POP {pc}`), `LDM`, `STM`. Op `k` needs the `k`-th register in the list, a priority encoder over the list with the first `k` registers masked. (done)
+   - **Exhaustive check:** all four pass, op by op. The check now also requires an expansion's length not to depend on the PC's alignment.
+   - **Restartability:** `tests/test_restartable.py` checks that every 16-bit expansion can restart from op 0 after a fault: no op before a load or store overwrites an input.
+   - **In the core:** an assembled Thumb function runs in lockstep, with:
+     - `PUSH {r4-r7, lr}` / `POP {r4-r7, pc}`;
+     - a nested call with its own `PUSH`/`POP`;
+     - `STM`/`LDM` with write-back, and `LDM` with its base in the list.
+   - **Timing fix:** the sequencer now takes decode's op and `last` from registers. The new population counts had made `last` the critical path (31 MHz), through `decodeInput.ready` to the fetch PC. Now 33.9 MHz and 5,275 LEs.
 3. **The rest:** the register shifts (5 ops each without flags), `REV`/`REV16`/`REVSH`, `MRS`/`MSR` of PRIMASK.
 4. **Interrupts at Thumb boundaries.**
    - **Interrupt source:** the testbench drives the core's timer interrupt from a plusarg schedule, in simulation only. The interrupt controller comes in Phase 5.
@@ -374,4 +381,4 @@ Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (execut
 
 Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board).
 
-1. Phase 3.2: register lists (`PUSH`, `POP`, `LDM`, `STM`).
+1. Phase 3.3: the register shifts, `REV`/`REV16`/`REVSH`, `MRS`/`MSR` of PRIMASK.

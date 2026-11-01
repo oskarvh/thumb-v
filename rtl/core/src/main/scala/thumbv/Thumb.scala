@@ -103,7 +103,9 @@ object Thumb {
   }
 
   /** Collects the decoded instruction's expansion: `out := op` for a single
-    * op, `out.seq(op0, op1, ...)` for several. `step` picks the one to emit. */
+    * op, `out.seq(op0, op1, ...)` for a fixed sequence, `out.at(op, last)`
+    * for one whose length varies (register lists), with op and last computed
+    * from `step` by the caller. `step` picks the op to emit. */
   private class Ops(step: UInt) {
     val result = ThumbOp()
     result.op := ILLEGAL
@@ -114,7 +116,35 @@ object Thumb {
       for (i <- 1 until ops.size) when(step === i) { result.op := ops(i) }
       result.last := step === ops.size - 1
     }
+    def at(op: Bits, last: Bool): Unit = {
+      result.op := op
+      result.last := last
+    }
   }
+
+  // --- Register lists (PUSH, POP, LDM, STM) -----------------------------------
+
+  /** The number of registers in a list. */
+  private def count(list: Bits): UInt = list.asBools.map(_.asUInt.resize(4 bits)).reduce(_ + _)
+
+  /** The bit number of the k-th register in a list, from the lowest. */
+  private def nth(list: Bits, k: UInt): UInt = {
+    val index = U(0, 4 bits)
+    for (i <- 0 until list.getWidth) {
+      val below = if (i == 0) U(0, 4 bits) else count(list(i - 1 downto 0))
+      when(list(i) && below === k) { index := i }
+    }
+    index
+  }
+
+  /** How many registers of a list are below register `index`: its slot. */
+  private def rank(list: Bits, index: UInt): UInt = {
+    val masked = list & ((U(1, list.getWidth bits) |<< index) - 1).asBits
+    count(masked)
+  }
+
+  /** A word offset as a 12-bit immediate: slot * 4. */
+  private def words(slot: UInt): Bits = imm(slot.resize(10) << 2)
 
   /** Op `step` of a Thumb instruction's expansion (hw2 only matters for
     * 32-bit instructions; pc1 is bit 1 of the instruction's address).
@@ -270,12 +300,39 @@ object Thumb {
           is(B"01010") { out.seq(slli(r20, r53, U(16)), srli(r20, r20, U(16))) }   // UXTH
           is(B"01011") { out := andi(r20, r53, B"x0FF") }                           // UXTB
         }
-        when(hw(10 downto 9) === B"10" && hw(8 downto 0) === 0) { out := NOP }   // PUSH {}
+        when(hw(10 downto 9) === B"10") {                      // PUSH {list, lr?}
+          // Store the registers below SP, lowest first, then move SP: n + 1 ops.
+          val list = hw(8 downto 0)                            // bit 8: LR
+          val n = count(list)
+          val index = nth(list, step)
+          val store = sw((index === 8) ? RA | reg(index.asBits), SP,
+                         ((step.resize(12) - n.resize(12)) |<< 2).asBits)   // (k - n) * 4
+          when(n === 0) { out := NOP }                         // UNPREDICTABLE
+            .otherwise { out.at((step === n) ? addi(SP, SP, negImm(n.resize(10) << 2)) | store, step === n) }
+        }
         when(hw === B"xB672") { out := CSRRCI_MSTATUS_MIE }    // CPSID i
         when(hw === B"xB662") { out := CSRRSI_MSTATUS_MIE }    // CPSIE i
       }
       is(B"10111") {
-        when(hw(10 downto 9) === B"10" && hw(8 downto 0) === 0) { out := NOP }   // POP {}
+        when(hw(10 downto 9) === B"10") {                      // POP {list, pc?}
+          // Load the registers from SP up, lowest first, then move SP. With PC:
+          // its word into T1, SP, then the jump, last.
+          val list = imm8.asBits
+          val withPc = hw(8)
+          val m = count(list)                                  // registers other than the PC
+          val n = m + withPc.asUInt.resize(4)
+          val load = lw(reg(nth(list, step).asBits), SP, words(step))
+          val tail = cloneOf(load)
+          tail := addi(SP, SP, words(n))
+          when(withPc) {
+            when(step === m) { tail := lw(T1, SP, words(m)) }
+            when(step === m + 2) { tail := jalr(X0, T1) }
+          }
+          when(n === 0) { out := NOP }                         // UNPREDICTABLE
+            .otherwise {
+              out.at((step < m) ? load | tail, step === (withPc ? (m + 2) | m))
+            }
+        }
         when(hw(10 downto 8) === B"110") { out := EBREAK }     // BKPT
         when(hw(10 downto 8) === B"111" && hw(3 downto 0) === 0) {
           switch(hw(7 downto 4)) {
@@ -287,14 +344,30 @@ object Thumb {
       }
 
       // --- Load and store multiple: ooooo nnn rrrrrrrr ------------------------
-      is(B"11000") {                                           // STM rn!, {}
-        when(imm8 === 0) { out := NOP }
+      is(B"11000") {                                           // STM rn!, {list}
+        // Store from rn up, lowest first, then write rn back: n + 1 ops.
+        val list = imm8.asBits
+        val n = count(list)
+        val store = sw(reg(nth(list, step).asBits), r108, words(step))
+        when(n === 0) { out := NOP }                           // UNPREDICTABLE
+          .otherwise { out.at((step === n) ? addi(r108, r108, words(n)) | store, step === n) }
       }
-      is(B"11001") {
-        when(imm8 === 0) { out := NOP }                        // LDM rn!, {}
-        when(imm8 === (U(1, 8 bits) |<< hw(10 downto 8).asUInt)) {
-          out := lw(r108, r108, imm(U(0)))                     // LDM rn, {rn}
-        }
+      is(B"11001") {                                           // LDM rn!, {list} / LDM rn, {list}
+        // Load from rn up, each register from its own slot. With rn in the
+        // list there's no write-back, and rn is loaded last, so a fault
+        // part-way through leaves it intact for the restart.
+        val list = imm8.asBits
+        val base = hw(10 downto 8).asUInt
+        val n = count(list)
+        val inList = list(base)
+        val others = list & ~(B(1, 8 bits) |<< base)
+        val index = UInt(4 bits)
+        index := nth(others, step)
+        when(inList && step === n - 1) { index := base.resize(4) }
+        val load = lw(reg(index.asBits), r108, words(rank(list, index)))
+        when(n === 0) { out := NOP }                           // UNPREDICTABLE
+          .elsewhen(inList) { out.at(load, step === n - 1) }
+          .otherwise { out.at((step === n) ? addi(r108, r108, words(n)) | load, step === n) }
       }
 
       // --- Branches and exception generation ----------------------------------

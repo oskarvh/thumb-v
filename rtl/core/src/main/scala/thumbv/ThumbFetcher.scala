@@ -213,6 +213,7 @@ abstract class ThumbFetcherImpl(var resetVector : BigInt,
       val isRvc = Bool()
       val thumb = Bool()          // THUMBV: a Thumb instruction; rsp.inst is its first op
       val raw = Bits(32 bits)     // THUMBV: the instruction as fetched, for the sequencer
+      val last0 = Bool()          // THUMBV: op 0 is the expansion's last
     }
 
 
@@ -299,10 +300,14 @@ abstract class ThumbFetcherImpl(var resetVector : BigInt,
       // set for 16-bit Thumb instructions, so the decode PC and link values
       // advance by 2, and by 4 for 32-bit ones.
       // Only op 0 here: it feeds the register file's early read address, as
-      // the decompressed instruction does. The sequencer in the injector
-      // produces the rest. Op 0 never depends on the PC's alignment (checked
-      // by tests/test_expander_rtl.py), which isn't known here.
-      output.rsp.inst := thumb ? Thumb.expand(raw(15 downto 0), raw(31 downto 16), False, U(0, 4 bits)).op | (isRvc ? decompressed | raw)
+      // the decompressed instruction does, and whether it's the last op goes
+      // into the injector register with it. The sequencer in the injector
+      // produces the rest. Neither op 0 nor an expansion's length depends on
+      // the PC's alignment (checked by tests/test_expander_rtl.py), which
+      // isn't known here.
+      val first = Thumb.expand(raw(15 downto 0), raw(31 downto 16), False, U(0, 4 bits))
+      output.rsp.inst := thumb ? first.op | (isRvc ? decompressed | raw)
+      output.last0 := first.last  // THUMBV
       input.ready := output.ready && (!iBusRsp.stages.last.input.valid || flushNext || (!(bufferValid && isInputHighRvc) && !(aligned && isInputLowRvc && isInputHighRvc)))
 
       when(output.fire){
@@ -383,13 +388,28 @@ abstract class ThumbFetcherImpl(var resetVector : BigInt,
       val sequencer = new Area {
         val step = RegInit(U(0, 4 bits))
         val pc1 = decode.input(PC)(1)
-        val now = Thumb.expand(decodeInput.raw(15 downto 0), decodeInput.raw(31 downto 16), pc1, step)
         val next = Thumb.expand(decodeInput.raw(15 downto 0), decodeInput.raw(31 downto 16), pc1, step + 1)
         val thumb = decodeInput.valid && decodeInput.thumb
+        // Decode's op and whether it's the last both come from registers: op 0
+        // and its `last` from the injector register (expanded in the
+        // decompressor), later ops from nextOp/nextLast, loaded with the next
+        // op when the sequencer moves on. So the expander here feeds only
+        // registers and the register file's early read address. `last` gates
+        // decodeInput.ready, which passes combinationally through the fetch
+        // stages to the fetch PC, and decode's op feeds the hazard check that
+        // stalls decode: expanding into either was the critical path.
+        val nextOp = Reg(Bits(32 bits))
+        val nextLast = Reg(Bool())
+        val op = (step === 0) ? decodeInput.rsp.inst | nextOp
+        val opLast = (step === 0) ? decodeInput.last0 | nextLast
         // Hold only while valid: the stages pass ready straight through, so an
         // empty register must still say ready.
-        val last = !thumb || now.last
+        val last = !thumb || opLast
         when(decode.arbitration.isFiring) { step := last ? U(0, 4 bits) | step + 1 }
+        when(decode.arbitration.isFiring && !last) {
+          nextOp := next.op
+          nextLast := next.last
+        }
         when(decode.arbitration.isRemoved) { step := 0 }
         if (decodePcGen) decodePc.injectedDecode setWhen(!last)
         when(thumb && step =/= 0) {
@@ -400,7 +420,7 @@ abstract class ThumbFetcherImpl(var resetVector : BigInt,
       decodeInput.ready := !decode.arbitration.isStuck && sequencer.last   // THUMBV: && last
       decode.arbitration.isValid := decodeInput.valid
       decode.insert(PC) := (if (decodePcGen) decodePc.pcReg else decodeInput.pc)
-      decode.insert(INSTRUCTION) := decodeInput.thumb ? sequencer.now.op | decodeInput.rsp.inst   // THUMBV
+      decode.insert(INSTRUCTION) := sequencer.op   // THUMBV: op 0 is decodeInput.rsp.inst, for RISC-V too
       if (compressedGen) decode.insert(IS_RVC) := decodeInput.isRvc
       // THUMBV: the register file reads one cycle early: the next op of this
       // Thumb instruction, or after its last op, the next instruction's first.

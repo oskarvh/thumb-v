@@ -105,13 +105,13 @@ def thumb_instructions_run(images, result):
     The ops of one execution are consecutive records with the same PC.
     """
     thumb = images[1]
-    ops, previous = {}, None
+    ops, previous, run = {}, None, 0
     for r in result.trace:
         if not any(lo <= r.pc < hi for lo, hi in thumb.code_ranges()):
             previous = None
             continue
         name = expander.expand(r.insn & 0xFFFF, r.insn >> 16, r.pc, rtlsim.HARDWARE).name
-        run = ops.get((r.pc, name), 0) + 1 if r.pc == previous else 1
+        run = run + 1 if r.pc == previous else 1
         ops[r.pc, name] = max(ops.get((r.pc, name), 0), run)
         previous = r.pc
     return ops
@@ -132,6 +132,21 @@ def test_thumb_sequences(rtl_simulator, build_mixed, tmp_path):
                      "MOV_hi", "ADD_hi"}
     # LDR (literal) ran at both alignments.
     assert {pc % 4 for pc, name in run_ops if name == "LDR_lit"} == {0, 2}
+
+
+def test_thumb_register_lists(rtl_simulator, build_mixed, tmp_path):
+    """Phase 3.2: PUSH/POP with LR and PC, LDM/STM, a nested call."""
+    rv_elf, thumb_elf = build_mixed(["rtl_thumb_lists.S"], ["rtl_thumb_lists_main.c"])
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    run_ops = thumb_instructions_run(images, result)
+    longest = {}
+    for (pc, name), n in run_ops.items():
+        longest[name] = max(longest.get(name, 0), n)
+    assert longest["PUSH"] == 6 and longest["POP"] == 7     # {r4-r7, lr}: 5 + SP; {r4-r7, pc}: 4 + T1, SP, jump
+    assert longest["STM"] == 5 and longest["LDM"] == 4
 
 
 def single_op_violations(thumb_image):

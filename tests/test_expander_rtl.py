@@ -6,8 +6,9 @@ The rule (rtl/core/src/main/scala/thumbv/Thumb.scala): for every instruction
 the RTL implements so far, op k of the RTL's expansion is op k of the model's
 (Options(flags="none"), the hardware's mode until its flags unit), bit for
 bit, and `last` marks the model's last op. Every other instruction is the
-illegal instruction, as a single op. Op 0 must not depend on the PC's
-alignment, because the fetcher expands it before the alignment is known.
+illegal instruction, as a single op. Neither op 0 nor the expansion's length
+may depend on the PC's alignment, because the fetcher expands op 0 and
+decides whether it's the last before the alignment is known.
 """
 
 import random
@@ -29,6 +30,8 @@ MULTI_OP = {
     "LDR_lit", "ADR", "BICS", "SXTH", "SXTB", "UXTH", "BL",
     "STR_reg", "STRH_reg", "STRB_reg", "LDRSB_reg", "LDR_reg", "LDRH_reg", "LDRB_reg", "LDRSH_reg",
     "ADD_hi", "MOV_hi", "BX", "BLX",
+    # 3.2: register lists.
+    "PUSH", "POP", "LDM", "STM",
 }
 
 
@@ -77,7 +80,9 @@ def check(instructions, alignments, tmp_path):
     for hw1, hw2 in instructions:
         for pc1 in alignments:
             want = expected(hw1, hw2, pc1)
-            assert want[0] == expected(hw1, hw2, 1 - pc1)[0], f"{hw1:04x}: op 0 depends on the PC"
+            other = expected(hw1, hw2, 1 - pc1)
+            assert want[0] == other[0], f"{hw1:04x}: op 0 depends on the PC"
+            assert len(want) == len(other), f"{hw1:04x}: the length depends on the PC"
             for step, item in enumerate(want):
                 queries.append((hw1, hw2, pc1, step))
                 wanted.append(item)

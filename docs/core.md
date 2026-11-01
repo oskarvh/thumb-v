@@ -42,12 +42,15 @@ In the decompressor ([vexriscv-notes.md](vexriscv-notes.md#instruction-length-an
 
 In the injector, the sequencer (Phase 3.1, [vexriscv-notes.md](vexriscv-notes.md#holding-decode-the-sequencer)):
 - **Holding the instruction:** it holds a Thumb instruction in the injector register until its last op has gone into decode, by gating `decodeInput.ready` with `last`.
-- **Which op:** `step` counts the ops; decode gets op `step` from `Thumb.expand` on the registered instruction.
+- **Which op:** `step` counts the ops.
+  - **Op 0:** decode takes it, and whether it's the last, from the injector register; the decompressor expands both.
+  - **Op 1 and up:** when decode accepts an op, the sequencer expands the next one from the registered instruction into `nextOp`/`nextLast`.
+  - **Why registers:** decode's op and `last` therefore never come straight from an expander. `last` gates `decodeInput.ready`, which passes combinationally back to the fetch PC, and decode's op feeds the hazard check that stalls decode. Expanding into either was the critical path in 3.2 (31 MHz).
 - **The register file:** its early read address (`INSTRUCTION_ANTICIPATED`) is op `step + 1`, or after the last op, the next instruction's op 0.
 - **PC-hold:** `decodePc.injectedDecode` is set on every op but the last, so all ops carry the Thumb instruction's address, and `IS_RVC` advances the PC once at the end.
 - **Flushes:** `step` returns to 0 when decode is flushed (a jump or a trap).
 - **Interrupts:** held off (`InterruptionInhibitor`) while op 1 or later is in decode, so they land between Thumb instructions (D3). The test comes in 3.4.
-- **Timing:** expanding in decode puts the expander on the path into execute (Fmax 38.9 MHz, [resources.md](resources.md)). If that ever matters, op `step + 1` can be computed a cycle early and registered.
+- **Timing:** the critical path is code RAM → aligner → op 0's expansion → the register file's read address (Fmax 33.9 MHz, [resources.md](resources.md)).
 
 **The Thumb region CSRs (D7)** (`ThumbRegionPlugin.scala`):
 
@@ -74,7 +77,14 @@ In the injector, the sequencer (Phase 3.1, [vexriscv-notes.md](vexriscv-notes.md
   - `SVC`, `BKPT`, `CPSID`/`CPSIE`, `WFI` and the hints.
 - **Results only:** there's no flags unit until Phase 4. Flag-setting instructions compute their result only, compares are `nop`s, and instructions that read the flags (`ADCS`, `SBCS`, `B<cond>`, `MRS`/`MSR` of the APSR) are illegal. So code that depends on flags traps, rather than going wrong.
 - **Multi-op instructions (Phase 3.1):** the register-offset loads and stores, `LDR` (literal), `ADR`, `BICS`, `SXTH`/`SXTB`/`UXTH`, `BL` beyond ±1 MiB, and `MOV`/`ADD`/`BX`/`BLX` with the PC as an operand: two to five ops each.
-- **Everything else:** the remaining multi-op instructions (`PUSH`, `POP`, `LDM`, `STM` until 3.2; the register shifts, `REV`/`REV16`/`REVSH`, `MRS`/`MSR` of PRIMASK until 3.3), undefined encodings and `UDF` become the all-zero illegal instruction. They trap with `mepc` at their own address.
+- **Register lists (Phase 3.2):**
+  - **`PUSH`:** stores the registers below SP, then moves SP.
+  - **`POP`:** loads them, then moves SP. With the PC, it loads the PC's word into T1, moves SP, then jumps, last.
+  - **`STM`:** stores, then writes back the base.
+  - **`LDM`:** loads each register from its own slot. With the base register in the list, there's no write-back and the base is loaded last.
+
+  Each takes one op per register plus one. Op k uses the k-th register in the list: a population count per list position, compared with `step`.
+- **Everything else:** the remaining multi-op instructions (the register shifts, `REV`/`REV16`/`REVSH`, `MRS`/`MSR` of PRIMASK until 3.3), undefined encodings and `UDF` become the all-zero illegal instruction. They trap with `mepc` at their own address.
 - **The check:** `tests/test_expander_rtl.py` compares the expander, generated on its own as `ThumbExpander.v`, against the model op by op: every 16-bit instruction at both PC alignments and about 518,000 32-bit instructions ([architecture.md](architecture.md)).
 
 Not included yet:

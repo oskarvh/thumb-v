@@ -64,9 +64,9 @@ flowchart TB
         MODE["mode select<br/>inThumb: fetch word in a region?"]:::thumbv
         ALIGN["aligner<br/>halfword buffer, length rule:<br/>RVC bits 1:0 or Thumb.is32"]:::thumbv
         RVCD["RVC decompressor"]:::copied
-        EXP["Thumb.expand, op 0<br/>for the register file's early read<br/>(results only: no flags yet)"]:::thumbv
+        EXP["Thumb.expand, op 0 and whether it's the last<br/>(results only: no flags yet)"]:::thumbv
         INJ["injector register<br/>decodeInput"]:::copied
-        SEQ["sequencer<br/>Thumb.expand on the registered instruction: op step, op step + 1<br/>holds decodeInput until the last op; PC hold (injectedDecode)"]:::thumbv
+        SEQ["sequencer<br/>op 0 from the injector register; Thumb.expand of op step + 1<br/>into nextOp/nextLast and the register file's early address<br/>holds decodeInput until the last op; PC hold (injectedDecode)"]:::thumbv
         DPC["decodePc<br/>decode PC += IS_RVC ? 2 : 4"]:::copied
     end
 
@@ -117,7 +117,7 @@ flowchart TB
 | Mode select, Thumb length rule in the aligner | `ThumbFetcher.scala`, marked `THUMBV` | built | 2.1 |
 | Thumb region CSRs | `rtl/core/.../ThumbRegionPlugin.scala` | built | 2.1 |
 | Expander, single ops | `rtl/core/.../Thumb.scala` | built: every instruction whose expansion is one op, results only; checked exhaustively against the model | 2.2 (2.1: a stub) |
-| Expander, multi-op | `Thumb.scala` | two- to five-op instructions built (3.1); register lists (3.2), the rest (3.3) planned | 3.1 |
+| Expander, multi-op | `Thumb.scala` | two- to five-op instructions (3.1) and register lists (3.2) built; the rest (3.3) planned | 3.1 |
 | Expander alone, for the exhaustive check | `ThumbExpander` in `Thumb.scala`, `sim/expander_tb.sv` | built, simulation only | 2.3 |
 | Sequencer, PC hold | `ThumbFetcher.scala`, marked `THUMBV` | built | 3.1 |
 | Interrupt gating | `ThumbFetcher.scala`, through `InterruptionInhibitor` | built, untested until the testbench raises interrupts (3.4) | 3.1 |
