@@ -135,21 +135,23 @@ def run(images, port: str | None = None, seconds: float = 2.0) -> bytes:
         uart.close()
 
 
-# Test programs by name: (Thumb sources, RISC-V sources) from tests/c/.
+# Test programs by name: (Thumb sources, RISC-V sources, interface header)
+# from tests/c/.
 PROGRAMS = {
-    "hello": ([], ["hello.c"]),
-    "blinky": ([], ["blinky.c"]),
-    "leaf": (["thumb_leaf.c"], ["thumb_leaf_main.c"]),   # 2.4: RISC-V calls Thumb
+    "hello": ([], ["hello.c"], None),
+    "blinky": ([], ["blinky.c"], None),
+    "leaf": (["thumb_leaf.c"], ["thumb_leaf_main.c"], None),               # 2.4: RISC-V calls Thumb
+    "callback": (["callback.c"], ["callback_main.c"], "callback.h"),     # 3.5: and back
 }
 
 
 def build_program(name: str) -> list[Path]:
     """The ELF files of a test program from PROGRAMS, built in BOARD_DIR."""
-    thumb, rv = PROGRAMS[name]
+    thumb, rv, interface = PROGRAMS[name]
     out = BOARD_DIR / name
     out.mkdir(parents=True, exist_ok=True)
     if thumb:
-        return list(recipes.mixed_program(thumb, rv, out))
+        return list(recipes.mixed_program(thumb, rv, out, interface))
     return [recipes.c_program("rv32", rv, out)]
 
 

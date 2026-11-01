@@ -81,7 +81,7 @@ uv run python -m thumbv.interwork tests/c/abi.h
                      3. both images loaded side by side
 ```
 
-1. **Link the Thumb library first** (code at `0x1_4000`, data at `0x2000_0000`). Its code window, `0x1_4000`–`0x2_0000`, is what the RISC-V startup code (`tests/c/crt_rv32.S`) marks as Thumb region 0. Its calls to RISC-V functions resolve to slots in the import jump table, whose address is fixed in advance: `IMPORT_BASE` = `0x2_0000`, the start of the RISC-V ROM. Each import is defined with `.thumb_set name, IMPORT_BASE + 4*i`, which marks it as a Thumb branch target, so a plain `BL name` works.
+1. **Link the Thumb library first** (code at `0x1_4000`, data at `0x2000_0000`). Its code window, `0x1_4000`–`0x2_0000`, is what the RISC-V startup code (`tests/c/crt_rv32.S`) marks as Thumb region 0. Its calls to RISC-V functions resolve to slots in the import jump table, whose address is fixed in advance: `IMPORT_BASE` = `0x2_0004`, at the start of the RISC-V ROM, right after the jump to `_start` at the core's reset vector (`0x2_0000`). Each import is defined with `.thumb_set name, IMPORT_BASE + 4*i`, which marks it as a Thumb branch target, so a plain `BL name` works.
 2. **Link the RISC-V program** (code at `0x2_0000`, data at `0x2000_4000`) together with `interwork_rv32.S`:
    - The jump table, in section `.thumbv.imports`, which `tests/link/rv32.ld` places first in ROM: one `j` per import, to the RISC-V function or to its thunk.
    - The thunks.

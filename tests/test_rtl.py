@@ -64,7 +64,8 @@ def build_rv_asm(name, tmp_path):
     """An RV32 program from tests/asm/ with its own _start, linked like the C programs."""
     source = Path(__file__).parent / "asm" / name
     return elf.load(build.compile_and_link("rv32", [source], tmp_path / (source.stem + ".elf"),
-                                           [*build.C_FLAGS["rv32"], build._linker_script("rv32.ld")]))
+                                           [*build.C_FLAGS["rv32"], build._linker_script("rv32.ld"),
+                                            "-Wl,--entry=_start"]))   # no crt_rv32.S, so no _reset
 
 
 def test_thumb_mode_switch(rtl_simulator, tmp_path):
@@ -201,6 +202,35 @@ def test_interrupts_land_between_thumb_instructions(rtl_simulator, build_mixed, 
             multi_op += k > back
     # Enough of them, in Thumb code, in front of multi-op instructions.
     assert len(entries) > 300 and thumb > 150 and multi_op > 30, (len(entries), thumb, multi_op)
+
+
+def test_thumb_calls_back_into_riscv(rtl_simulator, build_mixed, tmp_path):
+    """Phase 3.5: gcc-compiled Thumb code calls RISC-V functions (PUSH/POP
+    around a BL through the import table) and reads a table through a
+    literal pool; RISC-V prints the results. In lockstep with the model."""
+    rv_elf, thumb_elf = build_mixed(["callback.c"], ["callback_main.c"], interface="callback.h")
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    digits = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3]
+    lookup5, callback11, report7 = digits[5], 12 * 12 + 11, digits[7] * 1000 + 8 * 8 + 7
+    assert result.uart == ("RISC-V and Thumb call each other\n"
+                           f"t_lookup(5)        = {lookup5:08x}\n"
+                           f"t_callback(11)     = {callback11:08x}\n"
+                           f"Thumb reports      = {report7:08x}\n")
+    assert result.a0 == lookup5 + callback11 + report7
+    # Thumb really called RISC-V: a BL from the Thumb window into the import table.
+    in_thumb = lambda pc: 0x1_4000 <= pc < 0x2_0000
+    calls = sum(1 for a, b in zip(result.trace, result.trace[1:])
+                if in_thumb(a.pc) and b.pc in (rtlsim_import(0), rtlsim_import(1)))
+    assert calls >= 4
+    rtlsim.memory_images(images, tmp_path, rtlsim.BOARD)     # it fits the board
+
+
+def rtlsim_import(i):
+    """Address of the i-th slot of the import jump table (thumbv.build.IMPORT_BASE)."""
+    return build.IMPORT_BASE + 4 * i
 
 
 def single_op_violations(thumb_image):

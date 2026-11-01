@@ -8,7 +8,7 @@ help:
 	@echo "make measure      cost the flags strategies over all benchmarks (Phase 0.7)"
 	@echo "make core         generate the VexRiscv core into build/rtl/ and lint it (Phase 1.1)"
 	@echo "make test-rtl     the RTL tests in Verilator: programs in lockstep with the model, the exhaustive expander check"
-	@echo "make board        run hello world on the CYC1000 (PROGRAM=blinky|leaf, or ELF=\"a.elf b.elf\")"
+	@echo "make board        run hello world on the CYC1000 (PROGRAM=blinky|leaf|callback, or ELF=\"a.elf b.elf\")"
 	@echo "make clean        remove build outputs and caches"
 
 setup:

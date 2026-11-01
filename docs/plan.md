@@ -333,12 +333,22 @@ Goal: every Thumb instruction that doesn't need the flags runs in hardware, howe
        - execution resumes at `mepc`.
      - **Negative control:** with the gating removed by hand, the program doesn't finish.
      - **Model:** it now stores the machine trap CSRs (`mtvec`, `mie`, `mepc`, ...) so that programs can set them up. It still takes no interrupts.
-5. **Integration, the exit criterion moved from 2.4:**
+5. **Integration, the exit criterion moved from 2.4:** (done)
    - a gcc-compiled Thumb function calls back into a RISC-V function (`PUSH {r4, lr}` … `BL` … `POP {r4, pc}`);
    - plus a table lookup through a literal pool;
    - in Verilator against the model, then on the board.
 
    Loops still wait for Phase 4: gcc compiles them with conditional branches.
+   - **The program:** `tests/c/callback.c` (Thumb) and `callback_main.c` (RISC-V) call each other through the interface header `callback.h`.
+     - The Thumb side runs gcc's `PUSH {r4-r6, lr}` … `BL` (to the import table) … `POP {r4-r6, pc}`.
+     - It reads a `const` table through a literal pool, with a register-offset `LDRB`.
+     - It passes RISC-V a string from its own `.rodata` to print.
+   - **Results:** it runs in lockstep with the model, with the UART text checked against values worked out by hand. `make board PROGRAM=callback` prints the same on the CYC1000.
+   - **A layout bug it found:** the import table sat at `0x2_0000`, the core's reset vector, so with an interface header the core booted into the first import slot. The model starts at the ELF's entry point and never saw it, and no earlier RTL program had an import table. Now:
+     - `0x2_0000` holds a jump to `_start` (`_reset`, which is also the ELF's entry point, so the model starts where the core does);
+     - the import table follows at `0x2_0004`.
+
+**Phase 3 is done** (2026-11-01). The RTL expands every instruction the model does in result-only mode. Interrupts land only between Thumb instructions. gcc-compiled Thumb code with calls in both directions runs in simulation and on the board. 5,614 LEs (23%), Fmax 33.3 MHz.
 
 **Exit criteria:**
 - The exhaustive check passes for whole sequences.
@@ -392,6 +402,7 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board).
+Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board). Phase 3 is done: 3.1–3.3 (the sequencer and every multi-op expansion), 3.4 (interrupts at Thumb boundaries), 3.5 (calls in both directions, in simulation and on the board).
 
-1. Phase 3.5: a gcc-compiled Thumb function calling back into RISC-V, and a table lookup, in simulation and on the board.
+1. Close Phase 3: merge `phase-3` to `main`.
+2. Phase 4: write its detailed section (the NZCV flags unit, D1), then start.

@@ -1,5 +1,5 @@
 /* RV32 test programs. RAM starts above the Thumb side's, and the stack is shared. */
-ENTRY(_start)
+ENTRY(_reset)   /* the core's reset vector, crt_rv32.S */
 
 MEMORY
 {
@@ -16,8 +16,11 @@ __thumb_region_limit = 0x00020000;
 
 SECTIONS
 {
-    /* The import jump table for Thumb code comes first, at a fixed address
-       (thumbv.build.IMPORT_BASE), so the Thumb side can be linked first. */
+    /* The core starts at 0x2_0000 (its reset vector): a jump to _start
+       (crt_rv32.S). Then the import jump table for Thumb code, at a fixed
+       address (thumbv.build.IMPORT_BASE), so the Thumb side can be linked
+       first. */
+    .reset : { KEEP(*(.text.reset)) } > ROM
     .imports : { KEEP(*(.thumbv.imports)) } > ROM
     .text : { KEEP(*(.text.start)) *(.text .text.*) *(.rodata .rodata.* .srodata .srodata.*) } > ROM
     .data : { *(.data .data.* .sdata .sdata.*) } > RAM
