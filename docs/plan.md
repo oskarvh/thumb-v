@@ -321,9 +321,18 @@ Goal: every Thumb instruction that doesn't need the flags runs in hardware, howe
    - **In the core:** an assembled Thumb function runs in lockstep, with all four register shifts at amounts 0, 1, 31, 32, 33 and 256, the three byte reversals, and PRIMASK through `MSR`, `MRS`, `CPSID` and `CPSIE`.
    - **A model fix the lockstep found:** `mstatus.MPP` now reads as machine mode (`0x1800`), as on VexRiscv, a machine-mode-only core.
    - **Cost:** 5,614 LEs, Fmax 33.3 MHz.
-4. **Interrupts at Thumb boundaries.**
+4. **Interrupts at Thumb boundaries.** (done)
    - **Interrupt source:** the testbench drives the core's timer interrupt from a plusarg schedule, in simulation only. The interrupt controller comes in Phase 5.
    - **Test:** a program with a trap handler that records `mepc` runs Thumb code under interrupts every few cycles. It must give the same result as without interrupts, and every recorded `mepc` must be the start of a Thumb instruction (or a RISC-V instruction).
+   - **Done** (`test_interrupts_land_between_thumb_instructions`, three seeds):
+     - **The interrupt source:** the SoC gained a timer interrupt input, and the testbench raises it every 1 to 29 cycles (`+irq`).
+     - **The program:** the 3.1–3.3 Thumb functions run under about 500 interrupts per run, over 150 of them in Thumb code and over 30 in front of multi-op instructions.
+     - **What's checked:**
+       - the same result as without interrupts (that run is in lockstep with the model);
+       - the instruction retired before each handler entry is never the interrupted one;
+       - execution resumes at `mepc`.
+     - **Negative control:** with the gating removed by hand, the program doesn't finish.
+     - **Model:** it now stores the machine trap CSRs (`mtvec`, `mie`, `mepc`, ...) so that programs can set them up. It still takes no interrupts.
 5. **Integration, the exit criterion moved from 2.4:**
    - a gcc-compiled Thumb function calls back into a RISC-V function (`PUSH {r4, lr}` … `BL` … `POP {r4, pc}`);
    - plus a table lookup through a literal pool;
@@ -385,4 +394,4 @@ Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (execut
 
 Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board).
 
-1. Phase 3.4: interrupts at Thumb boundaries, tested in simulation.
+1. Phase 3.5: a gcc-compiled Thumb function calling back into RISC-V, and a table lookup, in simulation and on the board.

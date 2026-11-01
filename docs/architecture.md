@@ -21,6 +21,7 @@ flowchart LR
 
     subgraph TOP["Top level: rtl/board/cyc1000_top.v on the board, sim/tb.sv in Verilator"]
         CLK["12 MHz clock<br/>reset: 1.4 s after configuration, user button"]:::thumbv
+        TBIRQ["testbench interrupt source (+irq)<br/>simulation only; tied off on the board"]:::thumbv
         subgraph SOC["SoC: rtl/soc/thumbv_soc.v"]
             CORE["Thumb-V core<br/>VexRiscv + Thumb-V plugins<br/>(next diagram)"]:::thumbv
             DEC["address decode<br/>RAMs alias through their regions"]:::thumbv
@@ -41,6 +42,7 @@ flowchart LR
     DEC -.-> SHIM
     DEC -.-> SDRAM
     NVIC -. "interrupts" .-> CORE
+    TBIRQ -- "irq_timer: timer interrupt" --> CORE
     CLK --> SOC
 ```
 
@@ -80,7 +82,7 @@ flowchart TB
     end
 
     NZCV["NZCV flags unit (D1)<br/>set-flags side-band, carry in, B#lt;cond#gt;<br/>Phase 4"]:::planned
-    GATE["interrupt gating<br/>InterruptionInhibitor while op 1+ is in decode<br/>(its test: Phase 3.4)"]:::thumbv
+    GATE["interrupt gating<br/>InterruptionInhibitor while op 1+ is in decode"]:::thumbv
 
     PC --> CMD --> RSP --> ALIGN
     MODE --> ALIGN
@@ -120,7 +122,8 @@ flowchart TB
 | Expander, multi-op | `Thumb.scala` | built: every result-only expansion (3.1–3.3), checked op by op against the model | 3.1 |
 | Expander alone, for the exhaustive check | `ThumbExpander` in `Thumb.scala`, `sim/expander_tb.sv` | built, simulation only | 2.3 |
 | Sequencer, PC hold | `ThumbFetcher.scala`, marked `THUMBV` | built | 3.1 |
-| Interrupt gating | `ThumbFetcher.scala`, through `InterruptionInhibitor` | built, untested until the testbench raises interrupts (3.4) | 3.1 |
+| Interrupt gating | `ThumbFetcher.scala`, through `InterruptionInhibitor` | built; tested under interrupts every few cycles (3.4) | 3.1 |
+| SoC timer interrupt input, testbench interrupt source | `rtl/soc/thumbv_soc.v` (`irq_timer`), `sim/tb.sv` (`+irq`) | built; the board ties it to 0 | 3.4 |
 | NZCV flags unit | plugin | planned | Phase 4 |
 | Interrupt controller, SysTick | SoC | planned | Phase 5 |
 | Peripheral shim | SoC | planned | Phase 6 |

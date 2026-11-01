@@ -78,6 +78,7 @@ class Machine:
         self.mem = Memory()
         self.thumb_regions = list(thumb_regions)  # [(base, limit)): fixed regions, set by the loader
         self.region_csrs = [0] * (2 * r.THUMB_REGIONS)   # the hardware's region CSRs, see rv32.py
+        self.trap_csrs = dict(r.TRAP_CSRS)                 # stored only, see rv32.py
         self.options = options
         self.retired_thumb = 0   # Thumb instructions completed
         self.retired_ops = 0     # RV32 ops executed, native or expanded
@@ -238,8 +239,13 @@ class Machine:
             return None
         csr = w >> 20
         regions = range(r.THUMB_REGION0, r.THUMB_REGION0 + 2 * r.THUMB_REGIONS)
-        if f3 in (1, 2, 3, 5, 6, 7) and (csr == r.MSTATUS or csr in regions):
-            old = self.mstatus if csr == r.MSTATUS else self.region_csrs[csr - r.THUMB_REGION0]
+        if f3 in (1, 2, 3, 5, 6, 7) and (csr == r.MSTATUS or csr in regions or csr in self.trap_csrs):
+            if csr == r.MSTATUS:
+                old = self.mstatus
+            elif csr in self.trap_csrs:
+                old = self.trap_csrs[csr]
+            else:
+                old = self.region_csrs[csr - r.THUMB_REGION0]
             src = rs1 if f3 >= 5 else self.x[rs1]   # immediate forms use the field itself
             if f3 & 3 == 1:
                 new = src
@@ -251,6 +257,8 @@ class Machine:
             if f3 & 3 == 1 or rs1:
                 if csr == r.MSTATUS:
                     self.mstatus = (new & MASK) | r.MSTATUS_MPP
+                elif csr in self.trap_csrs:
+                    self.trap_csrs[csr] = new & MASK
                 else:
                     self.region_csrs[csr - r.THUMB_REGION0] = new & MASK & ~3
             self._set(rd, old)

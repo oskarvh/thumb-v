@@ -167,8 +167,12 @@ class Result:
 
 
 def run(images, out_dir: Path, max_cycles: int = 10_000_000, trace: bool = True,
-        wave: Path | None = None, memories: Memories = SIM) -> Result:
-    """Run a program on the SoC in Verilator; `wave` names an FST waveform file to write."""
+        wave: Path | None = None, memories: Memories = SIM, irq: int | None = None) -> Result:
+    """Run a program on the SoC in Verilator; `wave` names an FST waveform file to write.
+
+    `irq`, a seed, makes the testbench raise the timer interrupt again and
+    again (sim/tb.sv); the program acknowledges each with a store to 0x1000_000C.
+    """
     sim = simulator(memories)
     code, data = memory_images(images, out_dir, memories)
     trace_path = out_dir / "trace.txt"
@@ -177,6 +181,8 @@ def run(images, out_dir: Path, max_cycles: int = 10_000_000, trace: bool = True,
         args.append(f"+trace={trace_path}")
     if wave:
         args.append(f"+wave={wave}")
+    if irq:
+        args.append(f"+irq={irq}")
     out = subprocess.run(args, check=True, capture_output=True, text=True).stdout
     lines = [l for l in out.splitlines(keepends=True) if not l.startswith("- ")]  # Verilator's $finish note
     status, a0, cycles, instructions = lines[-1].split()

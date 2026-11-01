@@ -161,6 +161,48 @@ def test_thumb_shifts_reversals_primask(rtl_simulator, build_mixed, tmp_path):
                      "MSR", "MRS", "CPSID", "CPSIE"}
 
 
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_interrupts_land_between_thumb_instructions(rtl_simulator, build_mixed, tmp_path, seed):
+    """Phase 3.4 (D3): with the timer interrupt raised every few cycles, Thumb
+    code gives the same result, and every interrupt lands between two
+    instructions: none of the interrupted instruction's ops ran before it.
+    Without the sequencer's interrupt gating, the program doesn't finish
+    (checked by hand: an interrupt part-way through a PUSH or POP {pc})."""
+    rv_elf, thumb_elf = build_mixed(["rtl_thumb_lists.S", "rtl_thumb_seq.S", "rtl_thumb_misc.S"],
+                                    ["irq_main.c", "irq_handler.S"])
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    (tmp_path / "quiet").mkdir()
+    (tmp_path / "irq").mkdir()
+    quiet = run(images, tmp_path / "quiet")
+    assert rtlsim.lockstep(images, quiet) is None
+    noisy = run(images, tmp_path / "irq", irq=seed)
+    assert noisy.a0 == quiet.a0
+
+    entry, read_mepc, mret = (images[0].symbols[s] for s in ("irq_handler", "irq_mepc", "irq_mret"))
+    trace = noisy.trace
+    entries = [i for i, r in enumerate(trace) if r.pc == entry]
+    thumb, multi_op = 0, 0
+    for i in entries:
+        before = trace[i - 1]
+        mepc = next(r.rd_wdata for r in trace[i:] if r.pc == read_mepc)
+        back = next(k for k in range(i, len(trace)) if trace[k].pc == mret) + 1
+        assert before.pc != mepc, f"interrupt inside the instruction at {mepc:#x}"
+        # Back to mepc, or straight into the next interrupt (taken before the
+        # instruction at mepc ran; its mepc is the same).
+        assert trace[back].pc in (mepc, entry), f"returned to {trace[back].pc:#x}, not {mepc:#x}"
+        if trace[back].pc == entry:
+            continue
+        if 0x1_4000 <= mepc < 0x2_0000:
+            thumb += 1
+            # The interrupted instruction, once resumed: several ops?
+            k = back
+            while k + 1 < len(trace) and trace[k + 1].pc == mepc:
+                k += 1
+            multi_op += k > back
+    # Enough of them, in Thumb code, in front of multi-op instructions.
+    assert len(entries) > 300 and thumb > 150 and multi_op > 30, (len(entries), thumb, multi_op)
+
+
 def single_op_violations(thumb_image):
     """Instructions in a Thumb image's code that the 2.2 expander can't run yet."""
     out = []
