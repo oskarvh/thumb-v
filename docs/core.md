@@ -1,6 +1,6 @@
 # The base core
 
-Thumb-V is VexRiscv (decision D4), generated from SpinalHDL in a fixed configuration, with its instruction fetcher replaced by a Thumb-V copy (D5) and Thumb-V's own plugins added. So far that means the Thumb region CSRs, mode select and the Thumb length rule (Phase 2.1); the expander, sequencer and flags unit come in Phases 2–4. See [Thumb-V changes](#thumb-v-changes).
+Thumb-V is VexRiscv (decision D4), generated from SpinalHDL in a fixed configuration, with its instruction fetcher replaced by a Thumb-V copy (D5) and Thumb-V's own plugins added. So far that means the Thumb region CSRs, mode select and the Thumb length rule (Phase 2.1); the expander, sequencer and flags unit come in Phases 2–4. See [Thumb-V changes](#thumb-v-changes), and [architecture.md](architecture.md) for block diagrams.
 
 - **Source:** `rtl/core/src/main/scala/thumbv/Core.scala`, an sbt project that depends on the VexRiscv submodule (`third_party/VexRiscv`, pinned at `baf7dc82`).
 - **Output:** `make core` writes `build/rtl/VexRiscv.v`, one Verilog file of about 5,000 lines. Generated files aren't committed: regenerate them with `make core`.
