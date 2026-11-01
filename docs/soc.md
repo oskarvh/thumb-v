@@ -8,7 +8,7 @@ The map matches the software model's layout ([build.py](../model/thumbv/build.py
 
 | Address | Size | What |
 |---|---|---|
-| `0x0000_0000` | 256 KiB | Code RAM: instructions and read-only data. Also readable and writable as data, for literal pools and `.rodata`. Thumb code links at `0x1_0000`, RISC-V code at `0x2_0000`, which is also the reset vector. |
+| `0x0000_0000` | 256 KiB | Code RAM: instructions and read-only data. Also readable and writable as data, for literal pools and `.rodata`. Thumb programs link at `0x1_0000` and the Thumb libraries of mixed programs at `0x1_4000`; RISC-V code at `0x2_0000`, which is also the reset vector. |
 | `0x1000_0000` | | UART data: writing sends the low byte |
 | `0x1000_0004` | | UART status: bit 0 = busy |
 | `0x1000_0008` | | LEDs: bits 7:0, read/write |

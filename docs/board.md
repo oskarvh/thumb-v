@@ -4,7 +4,9 @@ Thumb-V runs on the Trenz CYC1000 (Cyclone 10 LP `10CL025YU256C8G`, 12 MHz oscil
 
 ```sh
 make board                      # hello world
-make board ELF=program.elf      # any RV32 program built with tests/link/rv32.ld
+make board PROGRAM=leaf         # RISC-V calls gcc-compiled Thumb functions (Phase 2.4)
+make board PROGRAM=blinky       # counts on the LEDs, forever
+make board ELF="a.elf b.elf"    # any program built with tests/link/rv32.ld (and thumb_lib.ld)
 ```
 
 `make board` runs `python -m thumbv.board`, which:
@@ -26,7 +28,10 @@ The FPGA's configuration is SRAM, so the board forgets the program at power-off.
 
 **Memories.** The board has 66 M9K blocks (66 KB), so its RAMs are smaller than in simulation: 32 KiB of code RAM and 16 KiB of data RAM.
 - **Aliasing:** each RAM repeats through its 256 KiB or 64 KiB region, so programs linked for the simulation run unchanged. A RISC-V program's code at `0x2_0000` lands at the start of the code RAM, and its stack at the top of the data region lands at the top of the data RAM.
-- **Collisions:** `thumbv.rtlsim.memory_images` refuses a program whose parts would land on the same RAM byte. Thumb code at `0x1_0000` and RISC-V code at `0x2_0000` collide, for example, so mixed programs don't fit yet.
+- **Collisions:** `thumbv.rtlsim.memory_images` refuses a program whose loaded parts would land on the same RAM byte.
+- **Mixed programs:** the Thumb library's window starts at `0x1_4000` (`tests/link/thumb_lib.ld`), so its code lands in the code RAM's upper 16 KiB and the RISC-V side's (`0x2_0000`) in the lower 16 KiB. Each side must stay under 16 KiB.
+- **Data:** the Thumb library's data (`0x2000_0000`) and the RISC-V side's (`0x2000_4000`) both land at the start of the 16 KiB data RAM, below the shared stack. So on the board, only one side may have data. Initialised data is caught by the collision check, but zeroed data (`.bss`) and the stack aren't loaded, so they aren't checked.
+- **Thumb-only programs** (`0x1_0000`, `tests/link/thumb.ld`) would collide with nothing, but they need RISC-V startup code to reach them: the reset vector is RISC-V code at `0x2_0000`.
 - **The same configuration in simulation:** `python -m thumbv.rtlsim --board` runs the board's RAM sizes in Verilator, and `tests/test_rtl.py` checks hello world with them.
 
 **Reset.** The SoC is held in reset for 1.4 s after configuration, and while the user button is held. The delay is for the host: loading the FPGA resets the FT2232H, its serial port disappears and comes back (often as a different `/dev/ttyUSB*`), and the program's first output would otherwise be lost. The button switches to ground with no pull-up on the board, so the pin's weak pull-up is on.
@@ -54,4 +59,5 @@ The FPGA's configuration is SRAM, so the board forgets the program at power-off.
 ## Test programs
 
 - `tests/c/hello.c` prints "Hello from Thumb-V" and sets the LEDs to `0xA5`.
-- `tests/c/blinky.c` counts on the LEDs and prints the count about 3 times a second, forever: `make board ELF=build/board/blinky.elf` after building it with `thumbv.build.c_program("rv32", ["blinky.c"], ...)`.
+- `tests/c/blinky.c` counts on the LEDs and prints the count about 3 times a second, forever (`PROGRAM=blinky`).
+- `tests/c/thumb_leaf_main.c` calls the gcc-compiled leaf Thumb functions in `tests/c/thumb_leaf.c` and prints their results (`PROGRAM=leaf`). The LEDs show the low byte of the results' sum, `0x9d`.

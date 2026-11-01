@@ -8,7 +8,7 @@ help:
 	@echo "make measure      cost the flags strategies over all benchmarks (Phase 0.7)"
 	@echo "make core         generate the VexRiscv core into build/rtl/ and lint it (Phase 1.1)"
 	@echo "make test-rtl     the RTL tests in Verilator: programs in lockstep with the model, the exhaustive expander check"
-	@echo "make board        run hello world (or ELF=program.elf) on the CYC1000 (Phase 1.4)"
+	@echo "make board        run hello world on the CYC1000 (PROGRAM=blinky|leaf, or ELF=\"a.elf b.elf\")"
 	@echo "make clean        remove build outputs and caches"
 
 setup:
@@ -37,7 +37,7 @@ test-rtl: core
 	THUMBV_REQUIRE_RTL=1 uv run pytest tests/test_rtl.py tests/test_expander_rtl.py
 
 board: core
-	uv run python -m thumbv.board $(ELF)
+	uv run python -m thumbv.board $(ELF) $(if $(PROGRAM),--program $(PROGRAM))
 
 clean:
 	rm -rf build .pytest_cache

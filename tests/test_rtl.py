@@ -10,7 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from thumbv import build, elf, lockstep, rtlsim
+from thumbv import build, elf, expander, lockstep, rtlsim
+from thumbv import rv32
 
 
 def run(images, tmp_path, **kwargs):
@@ -92,10 +93,59 @@ def test_thumb_single_ops(rtl_simulator, build_mixed, tmp_path):
     result = run(images, tmp_path)
     model = lockstep.simulate(images, stop=images[0].symbols["done"], options=rtlsim.HARDWARE)
     assert result.a0 == model.final_regs[0]
-    in_thumb = sum(1 for r in result.trace if 0x1_0000 <= r.pc < 0x2_0000)
+    in_thumb = sum(1 for r in result.trace if 0x1_4000 <= r.pc < 0x2_0000)
     assert in_thumb > 80                    # both calls ran in Thumb mode
     divergence = rtlsim.lockstep(images, result)
     assert divergence is None, str(divergence)
+
+
+def single_op_violations(thumb_image):
+    """Instructions in a Thumb image's code that the 2.2 expander can't run yet."""
+    out = []
+    for lo, hi in thumb_image.code_ranges():
+        data = b"".join(s.data for s in thumb_image.segments if s.addr <= lo < s.addr + len(s.data))
+        base = next(s.addr for s in thumb_image.segments if s.addr <= lo < s.addr + len(s.data))
+        pc = lo
+        while pc < hi:
+            hw1 = int.from_bytes(data[pc - base:pc - base + 2], "little")
+            hw2 = int.from_bytes(data[pc - base + 2:pc - base + 4], "little")
+            e = expander.expand(hw1, hw2, pc, rtlsim.HARDWARE)
+            if len(e.ops) != 1 or e.ops[0] == rv32.ILLEGAL:
+                out.append(f"{pc:#x} {e.name}")
+            pc += e.length
+    return out
+
+
+def test_mixed_leaf_program(rtl_simulator, build_mixed, tmp_path):
+    """Phase 2.4: RISC-V calls gcc-compiled leaf Thumb functions and prints the
+    results over the UART, in lockstep with the model."""
+    rv_elf, thumb_elf = build_mixed(["thumb_leaf.c"], ["thumb_leaf_main.c"])
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    assert not single_op_violations(images[1]), "gcc emitted instructions the expander can't run yet"
+    result = run(images, tmp_path)
+    # The functions in Python, as a second opinion on the printed values.
+    m32 = 0xFFFF_FFFF
+    def mix(a, b):
+        return (((a << 3) ^ b) * 7 + (a >> 2) - (b & 0xFF)) & m32
+    def xorshift(x, y):
+        x ^= (x << 13) & m32
+        x ^= x >> 17
+        x ^= (x << 5) & m32
+        return (x + y * 33) & m32
+    x = 1
+    for i in range(4):
+        x = xorshift(x, i)
+    values = [mix(1234, 567), mix(-5, 99), x]
+    assert result.uart == ("RISC-V calls Thumb\n"
+                           f"mix(1234, 567)     = {values[0]:08x}\n"
+                           f"mix(-5, 99)        = {values[1]:08x}\n"
+                           f"xorshift, 4 rounds = {values[2]:08x}\n")
+    assert result.a0 == sum(values) & m32
+    assert any(0x1_4000 <= r.pc < 0x2_0000 for r in result.trace)
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    # It fits the board's RAMs: Thumb code in the upper half of the code RAM.
+    rtlsim.memory_images(images, tmp_path, rtlsim.BOARD)
 
 
 def test_board_memories(rtl_simulator, build_c, tmp_path):
@@ -108,7 +158,8 @@ def test_board_memories(rtl_simulator, build_c, tmp_path):
 
 
 def test_board_memories_collide(tmp_path):
-    """Thumb code at 0x1_0000 and RISC-V code at 0x2_0000 share the board's 32 KiB code RAM."""
+    """Addresses 32 KiB apart share a byte of the board's code RAM (as Thumb-only
+    programs at 0x1_0000 and RISC-V code at 0x2_0000 would)."""
     image = SimpleNamespace(segments=[SimpleNamespace(addr=0x1_0000, data=b"\x01"),
                                       SimpleNamespace(addr=0x2_0000, data=b"\x02")])
     rtlsim.memory_images([image], tmp_path)   # fine with the simulation's RAMs

@@ -5,7 +5,8 @@ the ELF paths. Missing cross toolchains raise ToolMissing.
 
 Memory layout of the programs (see tests/link/):
   Thumb programs        code 0x0001_0000, data 0x2000_0000 (48 KiB)
-  Thumb libraries       code 0x0001_0000, data 0x2000_0000 (16 KiB)   for mixed programs
+  Thumb libraries       code 0x0001_4000, data 0x2000_0000 (16 KiB)   for mixed programs:
+                        the Thumb window, Thumb region 0 (set by crt_rv32.S)
   RV32 programs         code 0x0002_0000, data 0x2000_4000 (16 KiB)
                         the import jump table for Thumb code first, at IMPORT_BASE
   Stack                 top at 0x2001_0000, shared

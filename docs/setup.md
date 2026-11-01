@@ -58,7 +58,7 @@ THUMBV_REQUIRE_TOOLS=1 make test      # fail instead of skip when a toolchain is
 | `test_benchmarks.py` | CoreMark, Embench IoT and the soft-float kernels for Cortex-M0 |
 | `test_interwork.py` | Interface parsing, both ABIs' layouts, and generated thunks in a program built three ways |
 | `test_measure.py` | The 0.7 measurements: cost breakdown against the expander, flag liveness, lookahead safety |
-| `test_rtl.py` | Programs on the SoC in Verilator, in lockstep with the model: RISC-V, the Thumb mode switch, single-op Thumb code (skipped without Verilator and sbt) |
+| `test_rtl.py` | Programs on the SoC in Verilator, in lockstep with the model: RISC-V, the Thumb mode switch, single-op Thumb code, RISC-V calling gcc-compiled Thumb functions (skipped without Verilator and sbt) |
 | `test_expander_rtl.py` | The RTL expander against the model, for every 16-bit Thumb instruction and a large sweep of 32-bit ones (skipped without Verilator and sbt) |
 | `test_flags_none.py` | The model's result-only flags mode (the hardware's until Phase 4) against strategy A |
 
@@ -124,7 +124,7 @@ C:
 
 1. Put the source in `tests/c/`. There is no C library; libgcc is linked for helper routines.
 2. Build a Thumb-only or RV32-only program with `build_c("thumb", "my_test.c")` or `build_c("rv32", ...)`. This adds the startup file (`crt_thumb.S`/`crt_rv32.S`: set SP, call `main`, spin at `done`) and the linker script from `tests/link/`.
-3. Build a mixed program with `build_mixed(["lib.c"], ["main.c"])`. The Thumb library is linked first (code at `0x10000`, data at `0x2000_0000`); its global functions become absolute symbols in the RISC-V link (code at `0x20000`, data at `0x2000_4000`). The stack is shared, with its top at `0x2001_0000`.
+3. Build a mixed program with `build_mixed(["lib.c"], ["main.c"])`. The Thumb library is linked first (code at `0x1_4000`, data at `0x2000_0000`; the RISC-V startup code marks `0x1_4000`–`0x2_0000` as a Thumb region); its global functions become absolute symbols in the RISC-V link (code at `0x20000`, data at `0x2000_4000`). The stack is shared, with its top at `0x2001_0000`.
 4. For calls whose signatures the two ABIs pass differently, or for Thumb code that calls RISC-V functions by name, declare the functions in an interface header and pass it: `build_mixed([...], [...])` becomes `thumbv.build.mixed_program(thumb, rv, out_dir, interface="my.h")`. See [interworking.md](interworking.md) and `tests/test_interwork.py`.
 5. Run it with `thumbv.lockstep.run(images, stop=...)`. See `tests/test_lockstep_programs.py`.
 

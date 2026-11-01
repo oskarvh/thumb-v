@@ -21,4 +21,10 @@ static inline void soc_puts(const char *s)
         soc_putc(*s++);
 }
 
+static inline void soc_put_hex(uint32_t v)
+{
+    for (int i = 28; i >= 0; i -= 4)
+        soc_putc("0123456789abcdef"[(v >> i) & 0xF]);
+}
+
 #endif

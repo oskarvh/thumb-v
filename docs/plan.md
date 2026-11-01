@@ -268,15 +268,25 @@ Goal: a RISC-V program calls its first Thumb function in hardware.
      - `BL`'s range boundary.
    - **PC alignment:** the model is checked at both alignments, and single-op expansions don't depend on it.
    - **Speed:** 9 s, so it runs in every `make test` (`tests/test_expander_rtl.py`).
-4. Integration test: a RISC-V `main` calls a Thumb function compiled by `arm-none-eabi-gcc` that uses only this subset (e.g. a memory copy or table lookup without conditional branches). The Thumb function calls back into a RISC-V function, and the result is printed over UART. Runs in Verilator against the model, then on the board.
+4. Integration test: a RISC-V `main` calls a Thumb function compiled by `arm-none-eabi-gcc` that uses only this subset (e.g. a memory copy or table lookup without conditional branches). The Thumb function calls back into a RISC-V function, and the result is printed over UART. Runs in Verilator against the model, then on the board. (done, without the callback)
+   - **Scope change (decided before 2.4):** the callback moves to Phase 3. gcc saves LR with `PUSH`/`POP` in every Thumb function that calls another, even a tail call on Cortex-M0, and those are multi-op instructions. It also loads constants and table addresses from literal pools (`LDR` literal, two ops), and loops need conditional branches (flags).
+   - **What 2.4 is now:** a gcc-compiled *leaf* Thumb function that works on its arguments, called from RISC-V, with the result printed over the UART, in Verilator against the model and on the board. It also brings in the shared memory layout for mixed programs on the board, and startup code that sets the Thumb region CSRs.
+   - **Done:**
+     - **Layout:** the Thumb library of mixed programs links at `0x1_4000`, so on the board it shares the 32 KiB code RAM with the RISC-V side.
+     - **Startup code:** `crt_rv32.S` marks `0x1_4000`–`0x2_0000` as Thumb region 0.
+     - **The program:** `tests/c/thumb_leaf.c` (two gcc-compiled functions, 20 Thumb instructions) is called from `thumb_leaf_main.c`, which prints the results. The test checks:
+       - that every instruction gcc emitted is a single op;
+       - the lockstep against the model;
+       - the printed values against a Python version of the functions.
+     - **On the board:** the same output, with `make board PROGRAM=leaf`.
 
-**Exit criteria:** exhaustive expander check passes; the mixed call test runs in simulation and on the board.
+**Exit criteria:** exhaustive expander check passes; the mixed call test (a leaf Thumb function, see 2.4) runs in simulation and on the board.
 
 ## Later phases (outline)
 
 Each will get its own detailed section once Phase 2 is done.
 
-- **Phase 3: sequencer.** Multi-op expansions (`PUSH`/`POP`/`LDM`/`STM`, register-offset loads, long `BL`, register shifts, `REV`, `ADCS`/`SBCS`), the last-of-sequence bit and boundary-only interrupt gating.
+- **Phase 3: sequencer.** Multi-op expansions (`PUSH`/`POP`/`LDM`/`STM`, register-offset loads, long `BL`, register shifts, `REV`, `ADCS`/`SBCS`), the last-of-sequence bit and boundary-only interrupt gating. Exit criterion moved from 2.4: a gcc-compiled Thumb function calls back into a RISC-V function (`PUSH {lr}` … `BL` … `POP {pc}`), in simulation and on the board.
 - **Phase 4: flags,** with the hardware NZCV unit (D1): the unit and its CSR, the set-flags side-band bit, branch-on-condition, carry-in for `ADCS`/`SBCS`, and a strategy C expansion in the model to check the RTL against.
 - **Phase 5: interrupts and mixed execution in practice.**
   - The unified controller (NVIC programming model) and the shared timer (SysTick / `mtime` views) in RTL, verified in simulation against a model of the controller.
@@ -320,6 +330,7 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check).
+Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board).
 
-1. Phase 2.4: the mixed C program on the RTL and the board. The board's 32 KiB code RAM can't hold Thumb code at `0x1_0000` and RISC-V code at `0x2_0000` at once, so the shared layout moves the Thumb side to `0x1_4000`. The startup code sets the Thumb region CSRs.
+1. Close Phase 2: merge `phase-2` to `main`.
+2. Phase 3: write its detailed section (the sequencer: multi-op expansions, PC hold, interrupt gating), then start.

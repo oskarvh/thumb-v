@@ -102,7 +102,7 @@ See [`docs/plan.md`](docs/plan.md) for details and exit criteria.
 
 0. Software golden model: Thumb→RV32 expander, executor, lockstep against Unicorn, interworking prototype, flags measurements. **Done.**
 1. Bring up a stock RISC-V soft core in Verilator and on the CYC1000 with UART and LEDs. **Done.**
-2. Thumb region CSRs and a combinational expander for 1:1 instructions plus `B`/`BX`/`BL`; a RISC-V program calls a Thumb function.
+2. Thumb region CSRs and a combinational expander for 1:1 instructions plus `B`/`BX`/`BL`; a RISC-V program calls a Thumb function. **Done.**
 3. Sequencer for multi-instruction expansions; PC-hold and interrupt-boundary patches.
 4. Hardware flags unit (NZCV).
 5. Unified interrupt controller and shared entry routine; real ARM libraries and an RTOS with Thumb tasks.

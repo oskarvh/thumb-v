@@ -9,6 +9,11 @@ MEMORY
 
 __stack_top = 0x20010000;
 
+/* The Thumb window of mixed programs (tests/link/thumb_lib.ld): the startup
+   code marks it as Thumb region 0. */
+__thumb_region_base = 0x00014000;
+__thumb_region_limit = 0x00020000;
+
 SECTIONS
 {
     /* The import jump table for Thumb code comes first, at a fixed address

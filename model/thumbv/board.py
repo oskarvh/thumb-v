@@ -10,9 +10,10 @@ comes back, possibly as a different /dev/ttyUSB*. The board holds the SoC in
 reset for 1.4 s after configuration (rtl/board/cyc1000_top.v), long enough to
 find the port again by its stable /dev/serial/by-id name and start reading.
 
-    python -m thumbv.board [program.elf] [--port PORT] [--seconds 2]
+    python -m thumbv.board [program.elf ...] [--program NAME] [--port PORT] [--seconds 2]
 
-Without an ELF file it runs hello world (tests/c/hello.c).
+Without ELF files it builds and runs one of the test programs in PROGRAMS
+(default: hello world).
 """
 
 import argparse
@@ -134,14 +135,32 @@ def run(images, port: str | None = None, seconds: float = 2.0) -> bytes:
         uart.close()
 
 
+# Test programs by name: (Thumb sources, RISC-V sources) from tests/c/.
+PROGRAMS = {
+    "hello": ([], ["hello.c"]),
+    "blinky": ([], ["blinky.c"]),
+    "leaf": (["thumb_leaf.c"], ["thumb_leaf_main.c"]),   # 2.4: RISC-V calls Thumb
+}
+
+
+def build_program(name: str) -> list[Path]:
+    """The ELF files of a test program from PROGRAMS, built in BOARD_DIR."""
+    thumb, rv = PROGRAMS[name]
+    out = BOARD_DIR / name
+    out.mkdir(parents=True, exist_ok=True)
+    if thumb:
+        return list(recipes.mixed_program(thumb, rv, out))
+    return [recipes.c_program("rv32", rv, out)]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Run an RV32 program on the CYC1000.")
-    parser.add_argument("elf", nargs="*", type=Path, help="default: hello world")
+    parser.add_argument("elf", nargs="*", type=Path, help="ELF files to run (default: --program)")
+    parser.add_argument("--program", choices=PROGRAMS, default="hello", help="a test program by name")
     parser.add_argument("--port", help="serial port (default: found by its /dev/serial/by-id name)")
     parser.add_argument("--seconds", type=float, default=2.0, help="how long to read the UART")
     args = parser.parse_args(argv)
-    BOARD_DIR.mkdir(parents=True, exist_ok=True)
-    paths = args.elf or [recipes.c_program("rv32", ["hello.c"], BOARD_DIR)]
+    paths = args.elf or build_program(args.program)
     output = run([elf.load(p) for p in paths], args.port, args.seconds)
     sys.stdout.write(output.decode(errors="replace"))
     return 0
