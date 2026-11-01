@@ -7,6 +7,7 @@ FPGA resource use and timing of the board design ([board.md](board.md)), one row
 | 1.4 stock core | 2026-10-31 | 2,966 (12%) | 1,224 | 50 (76%) | 8 | 50.5 MHz | RV32IMC VexRiscv ([core.md](core.md)), 32 KiB code + 16 KiB data RAM, UART, LEDs; no PLL, runs at 12 MHz |
 | 2.1 mode switch | 2026-11-01 | 3,351 (14%) | 1,364 | 50 (76%) | 8 | 48.8 MHz | + 2 Thumb regions (four 30-bit CSRs and comparators in fetch), the Thumb length rule, the stub expander |
 | 2.2 single-op expander | 2026-11-01 | 3,954 (16%) | 1,364 | 50 (76%) | 8 | 42.8 MHz | + the expander: every single-op Thumb instruction. Critical path (23 ns): code RAM → aligner → expander → register file read address |
+| 3.1 sequencer | 2026-11-01 | 5,038 (20%) | 1,401 | 50 (76%) | 8 | 38.9 MHz | + the sequencer, the expander in decode (ops 1 and up, and the next op's registers), the 3.1 multi-op instructions. Critical path (25.6 ns): injector register → expander → decoder → bypass → execute's RS1 |
 
 ## 1.4 baseline
 

@@ -35,10 +35,19 @@ The core also has an RVFI retire trace port (`FormalPlugin`), which the simulati
 ```sh
 diff third_party/VexRiscv/src/main/scala/vexriscv/plugin/Fetcher.scala rtl/core/src/main/scala/thumbv/ThumbFetcher.scala
 ```
-So far, all of them are in the decompressor ([vexriscv-notes.md](vexriscv-notes.md#instruction-length-and-the-aligner)):
+In the decompressor ([vexriscv-notes.md](vexriscv-notes.md#instruction-length-and-the-aligner)):
 - **Mode:** the fetch word's address decides Thumb or RISC-V (`ThumbRegionPlugin.inThumb`).
 - **Length:** in Thumb mode, the instruction length comes from the Thumb rule (`Thumb.is32`: the first halfword's bits 15:11 are `11101`, `11110` or `11111`) instead of bits 1:0. "RVC" in the fetcher means 16-bit in either instruction set.
-- **Expansion:** Thumb instructions go through `Thumb.expand` instead of the RVC decompressor. The decode stage's `IS_RVC` is set for 16-bit Thumb instructions, so the PC and link values advance by 2, or by 4 for 32-bit ones.
+- **Expansion:** Thumb instructions go through `Thumb.expand` instead of the RVC decompressor, for op 0 only. The decode stage's `IS_RVC` is set for 16-bit Thumb instructions, so the PC and link values advance by 2, or by 4 for 32-bit ones. The raw instruction and a Thumb flag travel on with op 0 (`FetchRsp.raw`, `FetchRsp.thumb`).
+
+In the injector, the sequencer (Phase 3.1, [vexriscv-notes.md](vexriscv-notes.md#holding-decode-the-sequencer)):
+- **Holding the instruction:** it holds a Thumb instruction in the injector register until its last op has gone into decode, by gating `decodeInput.ready` with `last`.
+- **Which op:** `step` counts the ops; decode gets op `step` from `Thumb.expand` on the registered instruction.
+- **The register file:** its early read address (`INSTRUCTION_ANTICIPATED`) is op `step + 1`, or after the last op, the next instruction's op 0.
+- **PC-hold:** `decodePc.injectedDecode` is set on every op but the last, so all ops carry the Thumb instruction's address, and `IS_RVC` advances the PC once at the end.
+- **Flushes:** `step` returns to 0 when decode is flushed (a jump or a trap).
+- **Interrupts:** held off (`InterruptionInhibitor`) while op 1 or later is in decode, so they land between Thumb instructions (D3). The test comes in 3.4.
+- **Timing:** expanding in decode puts the expander on the path into execute (Fmax 38.9 MHz, [resources.md](resources.md)). If that ever matters, op `step + 1` can be computed a cycle early and registered.
 
 **The Thumb region CSRs (D7)** (`ThumbRegionPlugin.scala`):
 
@@ -64,8 +73,9 @@ So far, all of them are in the decompressor ([vexriscv-notes.md](vexriscv-notes.
   - high-register `MOV`/`ADD`, `B`, `BX`, `BLX`;
   - `SVC`, `BKPT`, `CPSID`/`CPSIE`, `WFI` and the hints.
 - **Results only:** there's no flags unit until Phase 4. Flag-setting instructions compute their result only, compares are `nop`s, and instructions that read the flags (`ADCS`, `SBCS`, `B<cond>`, `MRS`/`MSR` of the APSR) are illegal. So code that depends on flags traps, rather than going wrong.
-- **Everything else:** instructions whose expansion takes several ops (`PUSH`, `POP`, `LDM`, `STM`, register-offset loads and stores, `LDR` literal, `ADR`, the register shifts, `BICS`, the extends, `REV`), undefined encodings and `UDF` become the all-zero illegal instruction. They trap with `mepc` at their own address until the sequencer (Phase 3).
-- **The check:** `tests/test_expander_rtl.py` compares the expander, generated on its own as `ThumbExpander.v`, against the model for all of the 16-bit space and about 518,000 32-bit instructions ([architecture.md](architecture.md)).
+- **Multi-op instructions (Phase 3.1):** the register-offset loads and stores, `LDR` (literal), `ADR`, `BICS`, `SXTH`/`SXTB`/`UXTH`, `BL` beyond ±1 MiB, and `MOV`/`ADD`/`BX`/`BLX` with the PC as an operand: two to five ops each.
+- **Everything else:** the remaining multi-op instructions (`PUSH`, `POP`, `LDM`, `STM` until 3.2; the register shifts, `REV`/`REV16`/`REVSH`, `MRS`/`MSR` of PRIMASK until 3.3), undefined encodings and `UDF` become the all-zero illegal instruction. They trap with `mepc` at their own address.
+- **The check:** `tests/test_expander_rtl.py` compares the expander, generated on its own as `ThumbExpander.v`, against the model op by op: every 16-bit instruction at both PC alignments and about 518,000 32-bit instructions ([architecture.md](architecture.md)).
 
 Not included yet:
 - A debug module (JTAG). Useful for board bring-up in Phase 1.4.

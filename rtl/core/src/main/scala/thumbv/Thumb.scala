@@ -12,6 +12,8 @@ object Rv {
   def X0 = U(0, 5 bits)
   def RA = U(1, 5 bits)
   def SP = U(2, 5 bits)
+  def T1 = U(6, 5 bits)     // expander temporaries (model/thumbv/regmap.py)
+  def T2 = U(7, 5 bits)
 
   def ILLEGAL = B(0x00000000L, 32 bits)
   def NOP     = B(0x00000013L, 32 bits)   // addi x0, x0, 0
@@ -39,6 +41,11 @@ object Rv {
     imm(11 downto 5) ## rs2 ## rs1 ## f3(funct3) ## imm(4 downto 0) ## op(0x23)
   }
 
+  def u(rd: UInt, imm20: Bits, opcode: Int): Bits = {
+    assert(imm20.getWidth == 20)
+    imm20 ## rd ## op(opcode)
+  }
+
   def jal(rd: UInt, off: Bits): Bits = {
     assert(off.getWidth == 21)
     off(20) ## off(10 downto 1) ## off(11) ## off(19 downto 12) ## rd ## op(0x6F)
@@ -57,13 +64,16 @@ object Rv {
   def slli(rd: UInt, rs1: UInt, shamt: UInt) = r(0x00, 1, rd, rs1, shamt, 0x13)
   def srli(rd: UInt, rs1: UInt, shamt: UInt) = r(0x00, 5, rd, rs1, shamt, 0x13)
   def srai(rd: UInt, rs1: UInt, shamt: UInt) = r(0x20, 5, rd, rs1, shamt, 0x13)
+  def lb(rd: UInt, rs1: UInt, off: Bits)  = i(0, rd, rs1, off, 0x03)
+  def lh(rd: UInt, rs1: UInt, off: Bits)  = i(1, rd, rs1, off, 0x03)
   def lw(rd: UInt, rs1: UInt, off: Bits)  = i(2, rd, rs1, off, 0x03)
   def lbu(rd: UInt, rs1: UInt, off: Bits) = i(4, rd, rs1, off, 0x03)
   def lhu(rd: UInt, rs1: UInt, off: Bits) = i(5, rd, rs1, off, 0x03)
   def sw(rs2: UInt, rs1: UInt, off: Bits) = s(2, rs2, rs1, off)
   def sh(rs2: UInt, rs1: UInt, off: Bits) = s(1, rs2, rs1, off)
   def sb(rs2: UInt, rs1: UInt, off: Bits) = s(0, rs2, rs1, off)
-  def jalr(rd: UInt, rs1: UInt) = i(0, rd, rs1, B(0, 12 bits), 0x67)
+  def jalr(rd: UInt, rs1: UInt, off: Bits = B(0, 12 bits)) = i(0, rd, rs1, off, 0x67)
+  def auipc(rd: UInt, imm20: Bits = B(0, 20 bits)) = u(rd, imm20, 0x17)
 
   /** A 12-bit immediate: an unsigned value, or its negation. */
   def imm(v: UInt): Bits = v.resize(12).asBits
@@ -86,19 +96,44 @@ object Thumb {
     table(arm.resize(4).asUInt)
   }
 
-  /** The RV32 op for a Thumb instruction (hw2 only matters for 32-bit ones).
-    *
-    * Phase 2.2: every instruction whose expansion is a single op, with the
-    * model's Options(flags = "none"), bit for bit; everything else is the
-    * all-zero illegal instruction, until the sequencer (Phase 3) and the
-    * flags unit (Phase 4). The rule is checked for every halfword against
-    * the model (tests/test_expander_rtl.py).
-    */
-  def expand(hw1: Bits, hw2: Bits): Bits = is32(hw1) ? expand32(hw1, hw2) | expand16(hw1)
+  /** One op of a Thumb instruction's expansion. */
+  case class ThumbOp() extends Bundle {
+    val op = Bits(32 bits)
+    val last = Bool()       // the expansion's last op: the PC moves on after it
+  }
 
-  private def expand16(hw: Bits): Bits = {
-    val out = cloneOf(ILLEGAL)
-    out := ILLEGAL
+  /** Collects the decoded instruction's expansion: `out := op` for a single
+    * op, `out.seq(op0, op1, ...)` for several. `step` picks the one to emit. */
+  private class Ops(step: UInt) {
+    val result = ThumbOp()
+    result.op := ILLEGAL
+    result.last := True
+    def :=(op: Bits): Unit = seq(op)
+    def seq(ops: Bits*): Unit = {
+      result.op := ops.head
+      for (i <- 1 until ops.size) when(step === i) { result.op := ops(i) }
+      result.last := step === ops.size - 1
+    }
+  }
+
+  /** Op `step` of a Thumb instruction's expansion (hw2 only matters for
+    * 32-bit instructions; pc1 is bit 1 of the instruction's address).
+    *
+    * The model, model/thumbv/expander.py with Options(flags = "none"), is the
+    * reference, op for op and bit for bit. Implemented so far: every
+    * single-op expansion (Phase 2.2) and, from Phase 3.1, the two- to
+    * five-op ones listed in docs/core.md. Everything else is the all-zero
+    * illegal instruction. tests/test_expander_rtl.py checks this against the
+    * model for every 16-bit instruction, at both alignments.
+    */
+  def expand(hw1: Bits, hw2: Bits, pc1: Bool, step: UInt): ThumbOp = {
+    val result = ThumbOp()
+    when(is32(hw1)) { result := expand32(hw1, hw2, step) } otherwise { result := expand16(hw1, pc1, step) }
+    result
+  }
+
+  private def expand16(hw: Bits, pc1: Bool, step: UInt): ThumbOp = {
+    val out = new Ops(step)
 
     // Common fields: low registers at bits 2:0, 5:3, 8:6 and 10:8.
     val r20 = reg(hw(2 downto 0))
@@ -109,6 +144,9 @@ object Thumb {
     val imm5 = hw(10 downto 6).asUInt
     val imm7 = hw(6 downto 0).asUInt
     val imm8 = hw(7 downto 0).asUInt
+    // Offset from the instruction's address to Align(PC + 4, 4) + imm8 * 4,
+    // for LDR (literal) and ADR.
+    val literal = (imm8 << 2).resize(12) + (pc1 ? U(2, 12 bits) | U(4, 12 bits))
 
     switch(hw(15 downto 11)) {
       // --- Shift (immediate), add, subtract, move, compare ---------------------
@@ -148,7 +186,7 @@ object Thumb {
             is(B"1011") { out := NOP }                         // CMN
             is(B"1100") { out := or(r20, r20, r53) }           // ORRS
             is(B"1101") { out := mul(r20, r53, r20) }          // MULS rdm, rn, rdm
-            // BICS: two ops.
+            is(B"1110") { out.seq(xori(T1, r53, B"xFFF"), and(r20, r20, T1)) }   // BICS
             is(B"1111") { out := xori(r20, r53, B"xFFF") }     // MVNS
           }
         } otherwise {
@@ -157,26 +195,56 @@ object Thumb {
           val rm = hw(6 downto 3)
           val pc = B"1111"
           switch(hw(9 downto 8)) {
-            is(B"00") {                          // ADD rdn, rm (PC as either: several ops)
+            is(B"00") {                          // ADD rdn, rm
               when(rdn =/= pc && rm =/= pc) { out := add(reg(rdn), reg(rdn), reg(rm)) }
+              // The PC reads as PC + 4; written, it's a jump to the sum.
+              when(rdn =/= pc && rm === pc) {
+                out.seq(auipc(T1), addi(T1, T1, imm(U(4))), add(reg(rdn), reg(rdn), T1))
+              }
+              when(rdn === pc && rm =/= pc) {
+                out.seq(auipc(T1), add(T1, T1, reg(rm)), jalr(X0, T1, imm(U(4))))
+              }
+              when(rdn === pc && rm === pc) {
+                out.seq(auipc(T2), addi(T2, T2, imm(U(4))), auipc(T1), add(T1, T1, T2), jalr(X0, T1, imm(U(4))))
+              }
             }
             is(B"01") { out := NOP }             // CMP rn, rm (high registers)
             is(B"10") {                          // MOV rd, rm
               when(rdn === pc) {
                 when(rm =/= pc) { out := jalr(X0, reg(rm)) }          // MOV pc, rm: a jump
+                  .otherwise { out.seq(auipc(T1), addi(T1, T1, imm(U(4))), jalr(X0, T1)) }
               } elsewhen (rm =/= pc) {
                 out := addi(reg(rdn), reg(rm), imm(U(0)))
+              } otherwise {                                           // MOV rd, pc: PC + 4
+                out.seq(auipc(reg(rdn)), addi(reg(rdn), reg(rdn), imm(U(4))))
               }
             }
             is(B"11") {                          // BX rm, BLX rm (bits 2:0 must be 0)
-              when(hw(2 downto 0) === 0 && rm =/= pc) {
-                out := jalr(hw(7) ? RA | X0, reg(rm))
+              when(hw(2 downto 0) === 0) {
+                when(rm =/= pc) { out := jalr(hw(7) ? RA | X0, reg(rm)) }
+                  .otherwise { out.seq(auipc(T1), addi(T1, T1, imm(U(4))), jalr(hw(7) ? RA | X0, T1)) }
               }
             }
           }
         }
       }
-      // 01001 LDR (literal), 0101x loads and stores (register offset): two ops.
+      is(B"01001") { out.seq(auipc(T1), lw(r108, T1, imm(literal))) }   // LDR rt, [pc, #imm8*4]
+
+      // --- Loads and stores, register offset: 0101 ooo mmm nnn ttt -------------
+      is(B"01010", B"01011") {
+        val address = add(T1, r53, r86)
+        val zero = imm(U(0))
+        switch(hw(11 downto 9)) {
+          is(B"000") { out.seq(address, sw(r20, T1, zero)) }   // STR
+          is(B"001") { out.seq(address, sh(r20, T1, zero)) }   // STRH
+          is(B"010") { out.seq(address, sb(r20, T1, zero)) }   // STRB
+          is(B"011") { out.seq(address, lb(r20, T1, zero)) }   // LDRSB
+          is(B"100") { out.seq(address, lw(r20, T1, zero)) }   // LDR
+          is(B"101") { out.seq(address, lhu(r20, T1, zero)) }  // LDRH
+          is(B"110") { out.seq(address, lbu(r20, T1, zero)) }  // LDRB
+          is(B"111") { out.seq(address, lh(r20, T1, zero)) }   // LDRSH
+        }
+      }
 
       // --- Loads and stores, immediate offset: ooooo iiiii nnn ttt -----------
       is(B"01100") { out := sw(r20, r53, imm(imm5 << 2)) }     // STR
@@ -188,15 +256,19 @@ object Thumb {
       is(B"10010") { out := sw(r108, SP, imm(imm8 << 2)) }     // STR rt, [sp, #imm8*4]
       is(B"10011") { out := lw(r108, SP, imm(imm8 << 2)) }     // LDR rt, [sp, #imm8*4]
 
-      // --- Address generation (ADR: two ops) and stack adjustment ------------
+      // --- Address generation and stack adjustment ----------------------------
+      is(B"10100") { out.seq(auipc(r108), addi(r108, r108, imm(literal))) }   // ADR rd, #imm8*4
       is(B"10101") { out := addi(r108, SP, imm(imm8 << 2)) }   // ADD rd, sp, #imm8*4
 
       is(B"10110") {
         when(hw(10 downto 8) === B"000") {                     // ADD/SUB sp, sp, #imm7*4
           out := addi(SP, SP, hw(7) ? negImm(imm7 << 2) | imm(imm7 << 2))
         }
-        when(hw(10 downto 6) === B"01011") {                   // UXTB (SXTH, SXTB, UXTH: two ops)
-          out := andi(r20, r53, B"x0FF")
+        switch(hw(10 downto 6)) {                              // the extends
+          is(B"01000") { out.seq(slli(r20, r53, U(16)), srai(r20, r20, U(16))) }   // SXTH
+          is(B"01001") { out.seq(slli(r20, r53, U(24)), srai(r20, r20, U(24))) }   // SXTB
+          is(B"01010") { out.seq(slli(r20, r53, U(16)), srli(r20, r20, U(16))) }   // UXTH
+          is(B"01011") { out := andi(r20, r53, B"x0FF") }                           // UXTB
         }
         when(hw(10 downto 9) === B"10" && hw(8 downto 0) === 0) { out := NOP }   // PUSH {}
         when(hw === B"xB672") { out := CSRRCI_MSTATUS_MIE }    // CPSID i
@@ -235,12 +307,11 @@ object Thumb {
         out := jal(X0, off.asBits)
       }
     }
-    out
+    out.result
   }
 
-  private def expand32(hw1: Bits, hw2: Bits): Bits = {
-    val out = cloneOf(ILLEGAL)
-    out := ILLEGAL
+  private def expand32(hw1: Bits, hw2: Bits, step: UInt): ThumbOp = {
+    val out = new Ops(step)
 
     // BL: 11110 s iiiiiiiiii, 11 j 1 k iiiiiiiiiii. Beyond jal's +-1 MiB: two ops.
     when(hw1(15 downto 11) === B"11110" && hw2(15 downto 14) === B"11" && hw2(12)) {
@@ -250,7 +321,12 @@ object Thumb {
       val offset = (s ## i1 ## i2 ## hw1(9 downto 0) ## hw2(10 downto 0) ## B"0").asSInt
       val off = offset.resize(26) + 4
       val top = off(25 downto 20).asBits
-      when(top === 0 || top.andR) { out := jal(RA, off(20 downto 0).asBits) }
+      when(top === 0 || top.andR) {
+        out := jal(RA, off(20 downto 0).asBits)
+      } otherwise {                                // auipc + jalr: +-16 MiB
+        val hi = (off + 0x800)(25 downto 12)       // (off + 0x800) >> 12, signed
+        out.seq(auipc(T1, hi.resize(20).asBits), jalr(RA, T1, off(11 downto 0).asBits))
+      }
     }
     // DSB, DMB, ISB: 1111001110111111, 1000111101oo oooo (any option).
     when(hw1 === B"xF3BF") {
@@ -261,7 +337,7 @@ object Thumb {
     }
     // MSR, MRS: illegal without a flags unit (APSR), several ops (PRIMASK) or
     // emulated by the trap handler (the rest).
-    out
+    out.result
   }
 }
 
@@ -272,7 +348,12 @@ class ThumbExpander extends Component {
   val io = new Bundle {
     val hw1 = in Bits(16 bits)
     val hw2 = in Bits(16 bits)
+    val pc1 = in Bool()
+    val step = in UInt(4 bits)
     val op = out Bits(32 bits)
+    val last = out Bool()
   }
-  io.op := Thumb.expand(io.hw1, io.hw2)
+  val result = Thumb.expand(io.hw1, io.hw2, io.pc1, io.step)
+  io.op := result.op
+  io.last := result.last
 }

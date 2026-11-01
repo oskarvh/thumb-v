@@ -99,6 +99,41 @@ def test_thumb_single_ops(rtl_simulator, build_mixed, tmp_path):
     assert divergence is None, str(divergence)
 
 
+def thumb_instructions_run(images, result):
+    """The Thumb instructions in an RTL trace: {(pc, name): ops per execution}.
+
+    The ops of one execution are consecutive records with the same PC.
+    """
+    thumb = images[1]
+    ops, previous = {}, None
+    for r in result.trace:
+        if not any(lo <= r.pc < hi for lo, hi in thumb.code_ranges()):
+            previous = None
+            continue
+        name = expander.expand(r.insn & 0xFFFF, r.insn >> 16, r.pc, rtlsim.HARDWARE).name
+        run = ops.get((r.pc, name), 0) + 1 if r.pc == previous else 1
+        ops[r.pc, name] = max(ops.get((r.pc, name), 0), run)
+        previous = r.pc
+    return ops
+
+
+def test_thumb_sequences(rtl_simulator, build_mixed, tmp_path):
+    """Phase 3.1: an assembled Thumb function of two- to five-op instructions,
+    run by the sequencer, in lockstep with the model op by op."""
+    rv_elf, thumb_elf = build_mixed(["rtl_thumb_seq.S"], ["rtl_thumb_seq_main.c"])
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    run_ops = thumb_instructions_run(images, result)
+    multi = {name for (pc, name), n in run_ops.items() if n > 1}
+    assert multi >= {"LDR_lit", "ADR", "STR_reg", "STRH_reg", "STRB_reg", "LDR_reg", "LDRH_reg",
+                     "LDRSH_reg", "LDRB_reg", "LDRSB_reg", "BICS", "SXTH", "SXTB", "UXTH",
+                     "MOV_hi", "ADD_hi"}
+    # LDR (literal) ran at both alignments.
+    assert {pc % 4 for pc, name in run_ops if name == "LDR_lit"} == {0, 2}
+
+
 def single_op_violations(thumb_image):
     """Instructions in a Thumb image's code that the 2.2 expander can't run yet."""
     out = []

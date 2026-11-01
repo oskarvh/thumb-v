@@ -91,13 +91,14 @@ def expander_simulator() -> Path:
     return binary
 
 
-def expand_rtl(instructions, out_dir: Path) -> list[int]:
-    """The RTL expander's op for each (hw1, hw2)."""
+def expand_rtl(queries, out_dir: Path) -> list[tuple[int, bool]]:
+    """The RTL expander's (op, last) for each (hw1, hw2, pc1, step)."""
     sim = expander_simulator()
     inputs, outputs = out_dir / "expander_in.txt", out_dir / "expander_out.txt"
-    inputs.write_text("".join(f"{hw1:04x} {hw2:04x}\n" for hw1, hw2 in instructions))
+    inputs.write_text("".join(f"{hw1:04x} {hw2:04x} {pc1:x} {step:x}\n" for hw1, hw2, pc1, step in queries))
     subprocess.run([str(sim), f"+in={inputs}", f"+out={outputs}"], check=True, capture_output=True)
-    return [int(line, 16) for line in outputs.read_text().split()]
+    words = outputs.read_text().split()
+    return [(int(op, 16), last == "1") for op, last in zip(words[::2], words[1::2])]
 
 
 def memory_images(images, out_dir: Path, memories: Memories = SIM, suffix: str = ".hex") -> tuple[Path, Path]:
@@ -189,45 +190,63 @@ HARDWARE = Options(flags="none")
 
 
 def lockstep(images, result: Result, options: Options = HARDWARE) -> Divergence | None:
-    """Replay the RTL's retire trace against the model; the first difference, if any."""
+    """Replay the RTL's retire trace against the model; the first difference, if any.
+
+    The RTL retires each op of a Thumb instruction as its own record, all with
+    the instruction's address (PC-hold), so the model runs Thumb code one op
+    at a time too: op k of its expansion against record k.
+    """
     layout = Layout.for_images(images)
     m = _load_model(images, layout, options)
     m.mem.map(IO_BASE, PAGE)
     m.pc = images[0].entry & ~1
-    for step, r in enumerate(result.trace):
-        problems = []
-        if m.pc != r.pc:
-            problems.append(f"pc: model {m.pc:#010x}, RTL {r.pc:#010x}")
-        else:
+    trace, i = result.trace, 0
+    while i < len(trace):
+        pc = m.pc
+        if m.in_thumb(pc):
+            hw1 = m.mem.read(pc, 2)
+            hw2 = m.mem.read(pc + 2, 2) if expander.isa.is_32bit(hw1) else 0
+            e = expander.expand(hw1, hw2, pc, options)
+            ops, length = e.ops, e.length
             # The RVFI word holds the instruction as fetched: for a 16-bit
             # Thumb instruction, only its low half is the instruction.
-            n = 4
-            if m.in_thumb(m.pc) and not expander.isa.is_32bit(m.mem.read(m.pc, 2)):
-                n = 2
-            insn = m.mem.read(m.pc, n)
-            if insn != r.insn & ((1 << 8 * n) - 1):
+            n = length
+        else:
+            ops, length, n = [m.mem.read(pc, 4)], 4, 4
+        insn = m.mem.read(pc, n)
+        target = None
+        for op in ops:
+            if i == len(trace):
+                return None                       # the run ended part-way through
+            r = trace[i]
+            problems = []
+            if r.pc != pc:
+                problems.append(f"pc: model {pc:#010x}, RTL {r.pc:#010x}")
+            elif insn != r.insn & ((1 << 8 * n) - 1):
                 problems.append(f"instruction: model {insn:#0{2 + 2 * n}x}, RTL {r.insn:#010x}")
-        if problems:
-            return Divergence(step, r.pc, describe(m, layout, r.pc), problems)
-        if r.rmask and IO_BASE <= r.mem_addr < IO_BASE + IO_SIZE:
-            m.mem.write(r.mem_addr, 4, r.rdata)   # what the device returned
-        before = list(m.x)
-        m.mem.log = []
-        try:
-            m.step()
-        except Trap as trap:
-            return Divergence(step, r.pc, describe(m, layout, r.pc), [f"model trap: {trap}"])
-        changed = {i for i in range(32) if m.x[i] != before[i]}
-        if r.rd and m.x[r.rd] != r.rd_wdata:
-            problems.append(f"x{r.rd}: model {m.x[r.rd]:#010x}, RTL {r.rd_wdata:#010x}")
-        if changed - {r.rd}:
-            problems.append(f"model also wrote {sorted(changed - {r.rd})}")
-        model_stores = {a + i: (v >> 8 * i) & 0xFF for a, n, v in m.mem.log for i in range(n)}
-        rtl_stores = {r.mem_addr + i: (r.wdata >> 8 * i) & 0xFF for i in range(4) if r.wmask >> i & 1}
-        if model_stores != rtl_stores:
-            problems.append(f"stores: model {_bytes(model_stores)}, RTL {_bytes(rtl_stores)}")
-        if problems:
-            return Divergence(step, r.pc, describe(m, layout, r.pc), problems)
+            if problems:
+                return Divergence(i, r.pc, describe(m, layout, r.pc), problems)
+            if r.rmask and IO_BASE <= r.mem_addr < IO_BASE + IO_SIZE:
+                m.mem.write(r.mem_addr, 4, r.rdata)   # what the device returned
+            before = list(m.x)
+            m.mem.log = []
+            try:
+                target = m.execute(op, pc, link=pc + length)
+            except Trap as trap:
+                return Divergence(i, r.pc, describe(m, layout, r.pc), [f"model trap: {trap}"])
+            changed = {j for j in range(32) if m.x[j] != before[j]}
+            if r.rd and m.x[r.rd] != r.rd_wdata:
+                problems.append(f"x{r.rd}: model {m.x[r.rd]:#010x}, RTL {r.rd_wdata:#010x}")
+            if changed - {r.rd}:
+                problems.append(f"model also wrote {sorted(changed - {r.rd})}")
+            model_stores = {a + j: (v >> 8 * j) & 0xFF for a, k, v in m.mem.log for j in range(k)}
+            rtl_stores = {r.mem_addr + j: (r.wdata >> 8 * j) & 0xFF for j in range(4) if r.wmask >> j & 1}
+            if model_stores != rtl_stores:
+                problems.append(f"stores: model {_bytes(model_stores)}, RTL {_bytes(rtl_stores)}")
+            if problems:
+                return Divergence(i, r.pc, describe(m, layout, r.pc), problems)
+            i += 1
+        m.pc = target if target is not None else (pc + length) & 0xFFFF_FFFF
     return None
 
 

@@ -1,12 +1,13 @@
-"""Phase 2.3: the RTL expander against the model, for every 16-bit instruction
-and a large sweep of the 32-bit ones.
+"""The RTL expander against the model (Phases 2.3, 3.1): every 16-bit
+instruction at both PC alignments and a large sweep of the 32-bit ones, op by
+op through each expansion.
 
-The rule (rtl/core/src/main/scala/thumbv/Thumb.scala): wherever the model
-(Options(flags="none"), the hardware's mode until its flags unit) expands an
-instruction to a single op, the RTL produces that op, bit for bit; everywhere
-else it produces the illegal instruction, until the sequencer (Phase 3).
-Single-op expansions don't depend on the PC's alignment; the model is checked
-at both.
+The rule (rtl/core/src/main/scala/thumbv/Thumb.scala): for every instruction
+the RTL implements so far, op k of the RTL's expansion is op k of the model's
+(Options(flags="none"), the hardware's mode until its flags unit), bit for
+bit, and `last` marks the model's last op. Every other instruction is the
+illegal instruction, as a single op. Op 0 must not depend on the PC's
+alignment, because the fetcher expands it before the alignment is known.
 """
 
 import random
@@ -20,15 +21,23 @@ from thumbv.build import ToolMissing
 from conftest import REQUIRE_RTL
 
 NONE = expander.Options(flags="none")
-PCS = (0x1_0000, 0x1_0002)     # both halfword alignments
+BASE = 0x1_4000
+
+# Multi-op instructions the RTL implements, by step of the plan.
+MULTI_OP = {
+    # 3.1: two- to five-op sequences.
+    "LDR_lit", "ADR", "BICS", "SXTH", "SXTB", "UXTH", "BL",
+    "STR_reg", "STRH_reg", "STRB_reg", "LDRSB_reg", "LDR_reg", "LDRH_reg", "LDRB_reg", "LDRSH_reg",
+    "ADD_hi", "MOV_hi", "BX", "BLX",
+}
 
 
-def expected(hw1, hw2):
-    """The op the RTL must produce, the same at both PC alignments."""
-    ops = {expander.expand(hw1, hw2, pc, NONE).ops for pc in PCS}
-    assert len(ops) == 1 or all(len(o) > 1 for o in ops), f"{hw1:04x} {hw2:04x} depends on the PC"
-    ops = ops.pop()
-    return ops[0] if len(ops) == 1 else r.ILLEGAL
+def expected(hw1, hw2, pc1):
+    """The RTL's expansion: [(op, last), ...]."""
+    e = expander.expand(hw1, hw2, BASE + 2 * pc1, NONE)
+    if len(e.ops) > 1 and e.name not in MULTI_OP:
+        return [(r.ILLEGAL, True)]
+    return [(op, k == len(e.ops) - 1) for k, op in enumerate(e.ops)]
 
 
 def instructions_16():
@@ -62,22 +71,32 @@ def expander_sim():
         pytest.skip(f"{missing} not found")
 
 
-def check(instructions, tmp_path):
-    rtl = rtlsim.expand_rtl(instructions, tmp_path)
-    assert len(rtl) == len(instructions)
-    wrong = [(hw1, hw2, got, expected(hw1, hw2)) for (hw1, hw2), got in zip(instructions, rtl)
-             if got != expected(hw1, hw2)]
-    report = "\n".join(f"{hw1:04x} {hw2:04x} {expander.expand(hw1, hw2, PCS[0], NONE).name:10} "
-                       f"RTL {got:08x}, model {want:08x}" for hw1, hw2, got, want in wrong[:20])
-    assert not wrong, f"{len(wrong)} of {len(instructions)} differ:\n{report}"
-    return rtl
+def check(instructions, alignments, tmp_path):
+    """Compare every op of every instruction; returns the RTL's expansions."""
+    queries, wanted = [], []
+    for hw1, hw2 in instructions:
+        for pc1 in alignments:
+            want = expected(hw1, hw2, pc1)
+            assert want[0] == expected(hw1, hw2, 1 - pc1)[0], f"{hw1:04x}: op 0 depends on the PC"
+            for step, item in enumerate(want):
+                queries.append((hw1, hw2, pc1, step))
+                wanted.append(item)
+    got = rtlsim.expand_rtl(queries, tmp_path)
+    assert len(got) == len(queries)
+    wrong = [(q, g, w) for q, g, w in zip(queries, got, wanted) if g != w]
+    report = "\n".join(
+        f"{hw1:04x} {hw2:04x} pc1={pc1} step={step} "
+        f"{expander.expand(hw1, hw2, BASE + 2 * pc1, NONE).name:10} "
+        f"RTL {g[0]:08x}{' last' if g[1] else ''}, model {w[0]:08x}{' last' if w[1] else ''}"
+        for (hw1, hw2, pc1, step), g, w in wrong[:20])
+    assert not wrong, f"{len(wrong)} of {len(queries)} ops differ:\n{report}"
+    return got
 
 
 def test_every_16bit_instruction(expander_sim, tmp_path):
-    rtl = check(instructions_16(), tmp_path)
-    # The 2.2 subset: about 39,000 of the 63,488 16-bit halfwords are single ops.
-    assert sum(op != r.ILLEGAL for op in rtl) > 38_000
+    got = check(instructions_16(), (0, 1), tmp_path)
+    assert sum(op != r.ILLEGAL for op, _ in got) > 80_000
 
 
 def test_32bit_instructions(expander_sim, tmp_path):
-    check(instructions_32(), tmp_path)
+    check(instructions_32(), (0,), tmp_path)

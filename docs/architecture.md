@@ -64,9 +64,9 @@ flowchart TB
         MODE["mode select<br/>inThumb: fetch word in a region?"]:::thumbv
         ALIGN["aligner<br/>halfword buffer, length rule:<br/>RVC bits 1:0 or Thumb.is32"]:::thumbv
         RVCD["RVC decompressor"]:::copied
-        EXP["Thumb.expand<br/>one op per Thumb instruction: every single-op<br/>expansion, results only (no flags yet);<br/>anything else becomes the illegal instruction"]:::thumbv
+        EXP["Thumb.expand, op 0<br/>for the register file's early read<br/>(results only: no flags yet)"]:::thumbv
         INJ["injector register<br/>decodeInput"]:::copied
-        SEQ["sequencer: N ops per Thumb instruction<br/>holds decodeInput, PC hold, next op's rs1/rs2<br/>Phase 3"]:::planned
+        SEQ["sequencer<br/>Thumb.expand on the registered instruction: op step, op step + 1<br/>holds decodeInput until the last op; PC hold (injectedDecode)"]:::thumbv
         DPC["decodePc<br/>decode PC += IS_RVC ? 2 : 4"]:::copied
     end
 
@@ -80,7 +80,7 @@ flowchart TB
     end
 
     NZCV["NZCV flags unit (D1)<br/>set-flags side-band, carry in, B#lt;cond#gt;<br/>Phase 4"]:::planned
-    GATE["interrupt gating<br/>InterruptionInhibitor while op 1+ is in decode<br/>Phase 3"]:::planned
+    GATE["interrupt gating<br/>InterruptionInhibitor while op 1+ is in decode<br/>(its test: Phase 3.4)"]:::thumbv
 
     PC --> CMD --> RSP --> ALIGN
     MODE --> ALIGN
@@ -88,17 +88,16 @@ flowchart TB
     ALIGN --> EXP
     RVCD --> INJ
     EXP --> INJ
-    INJ --> DECODE
-    INJ -.-> SEQ
-    SEQ -.-> DECODE
+    INJ -- "raw Thumb instruction, op 0" --> SEQ
+    SEQ -- "op, next op's rs1/rs2" --> DECODE
     DPC -- "PC, IS_RVC" --> DECODE
     REGIONS --> MODE
     DECODE --> EXEC --> MEMORY --> WB
     EXEC -- "csrw 0x7C0-0x7C3" --> REGIONS
     MEMORY -- "jump target" --> PC
     WB -- "trap target: mtvec" --> PC
-    SEQ -.-> GATE
-    GATE -.-> WB
+    SEQ --> GATE
+    GATE -- "allowInterrupts" --> WB
     EXEC -.-> NZCV
     NZCV -.-> EXEC
 ```
@@ -118,9 +117,10 @@ flowchart TB
 | Mode select, Thumb length rule in the aligner | `ThumbFetcher.scala`, marked `THUMBV` | built | 2.1 |
 | Thumb region CSRs | `rtl/core/.../ThumbRegionPlugin.scala` | built | 2.1 |
 | Expander, single ops | `rtl/core/.../Thumb.scala` | built: every instruction whose expansion is one op, results only; checked exhaustively against the model | 2.2 (2.1: a stub) |
+| Expander, multi-op | `Thumb.scala` | two- to five-op instructions built (3.1); register lists (3.2), the rest (3.3) planned | 3.1 |
 | Expander alone, for the exhaustive check | `ThumbExpander` in `Thumb.scala`, `sim/expander_tb.sv` | built, simulation only | 2.3 |
-| Sequencer, PC hold | `ThumbFetcher.scala` | planned | Phase 3 |
-| Interrupt gating | plugin, `InterruptionInhibitor` | planned | Phase 3 |
+| Sequencer, PC hold | `ThumbFetcher.scala`, marked `THUMBV` | built | 3.1 |
+| Interrupt gating | `ThumbFetcher.scala`, through `InterruptionInhibitor` | built, untested until the testbench raises interrupts (3.4) | 3.1 |
 | NZCV flags unit | plugin | planned | Phase 4 |
 | Interrupt controller, SysTick | SoC | planned | Phase 5 |
 | Peripheral shim | SoC | planned | Phase 6 |

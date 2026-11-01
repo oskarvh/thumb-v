@@ -211,6 +211,8 @@ abstract class ThumbFetcherImpl(var resetVector : BigInt,
       val pc = UInt(32 bits)
       val rsp = IBusSimpleRsp()
       val isRvc = Bool()
+      val thumb = Bool()          // THUMBV: a Thumb instruction; rsp.inst is its first op
+      val raw = Bits(32 bits)     // THUMBV: the instruction as fetched, for the sequencer
     }
 
 
@@ -291,10 +293,16 @@ abstract class ThumbFetcherImpl(var resetVector : BigInt,
       output.valid := input.valid && !(throw2Bytes && !bufferValid && !isInputHighRvc)
       output.pc := input.pc
       output.isRvc := isRvc
+      output.thumb := thumb       // THUMBV
+      output.raw := raw           // THUMBV
       // THUMBV: Thumb instructions go through the expander. IS_RVC (isRvc) is
       // set for 16-bit Thumb instructions, so the decode PC and link values
       // advance by 2, and by 4 for 32-bit ones.
-      output.rsp.inst := thumb ? Thumb.expand(raw(15 downto 0), raw(31 downto 16)) | (isRvc ? decompressed | raw)
+      // Only op 0 here: it feeds the register file's early read address, as
+      // the decompressed instruction does. The sequencer in the injector
+      // produces the rest. Op 0 never depends on the PC's alignment (checked
+      // by tests/test_expander_rtl.py), which isn't known here.
+      output.rsp.inst := thumb ? Thumb.expand(raw(15 downto 0), raw(31 downto 16), False, U(0, 4 bits)).op | (isRvc ? decompressed | raw)
       input.ready := output.ready && (!iBusRsp.stages.last.input.valid || flushNext || (!(bufferValid && isInputHighRvc) && !(aligned && isInputLowRvc && isInputHighRvc)))
 
       when(output.fire){
@@ -330,7 +338,7 @@ abstract class ThumbFetcherImpl(var resetVector : BigInt,
       val decodeInput = (if (injectorStage) {
         val flushStage = getFlushAt(INJECTOR_M2S)
         val decodeInput = inputBeforeStage.m2sPipeWithFlush(flushStage, false, collapsBubble = false, flushInput = externalFlush)
-        decode.insert(INSTRUCTION_ANTICIPATED) := Mux(decode.arbitration.isStuck, decode.input(INSTRUCTION), inputBeforeStage.rsp.inst)
+        // THUMBV: INSTRUCTION_ANTICIPATED is assigned with the sequencer, below.
         iBusRsp.readyForError.clearWhen(decodeInput.valid) //Can't emit error when there is a instruction pending in the injector stage buffer
         incomingInstruction setWhen (decodeInput.valid)
         decodeInput
@@ -366,11 +374,38 @@ abstract class ThumbFetcherImpl(var resetVector : BigInt,
         pcValids := Vec(valids.takeRight(stages.size))
       }
 
-      decodeInput.ready := !decode.arbitration.isStuck
+      // THUMBV: the sequencer (Phase 3, docs/vexriscv-notes.md). A Thumb
+      // instruction stays in the injector register until its last op has gone
+      // into decode. Until then decodePc doesn't advance (injectedDecode), so
+      // every op carries the Thumb instruction's address (PC-hold), and
+      // interrupts are held off, so they land between Thumb instructions (D3).
+      // A flush (jump or trap) starts the next instruction at op 0.
+      val sequencer = new Area {
+        val step = RegInit(U(0, 4 bits))
+        val pc1 = decode.input(PC)(1)
+        val now = Thumb.expand(decodeInput.raw(15 downto 0), decodeInput.raw(31 downto 16), pc1, step)
+        val next = Thumb.expand(decodeInput.raw(15 downto 0), decodeInput.raw(31 downto 16), pc1, step + 1)
+        val thumb = decodeInput.valid && decodeInput.thumb
+        // Hold only while valid: the stages pass ready straight through, so an
+        // empty register must still say ready.
+        val last = !thumb || now.last
+        when(decode.arbitration.isFiring) { step := last ? U(0, 4 bits) | step + 1 }
+        when(decode.arbitration.isRemoved) { step := 0 }
+        if (decodePcGen) decodePc.injectedDecode setWhen(!last)
+        when(thumb && step =/= 0) {
+          pipeline.service(classOf[InterruptionInhibitor]).inhibateInterrupts()
+        }
+      }
+
+      decodeInput.ready := !decode.arbitration.isStuck && sequencer.last   // THUMBV: && last
       decode.arbitration.isValid := decodeInput.valid
       decode.insert(PC) := (if (decodePcGen) decodePc.pcReg else decodeInput.pc)
-      decode.insert(INSTRUCTION) := decodeInput.rsp.inst
+      decode.insert(INSTRUCTION) := decodeInput.thumb ? sequencer.now.op | decodeInput.rsp.inst   // THUMBV
       if (compressedGen) decode.insert(IS_RVC) := decodeInput.isRvc
+      // THUMBV: the register file reads one cycle early: the next op of this
+      // Thumb instruction, or after its last op, the next instruction's first.
+      if (injectorStage) decode.insert(INSTRUCTION_ANTICIPATED) := Mux(decode.arbitration.isStuck, decode.input(INSTRUCTION),
+        Mux(sequencer.last, inputBeforeStage.rsp.inst, sequencer.next.op))
 
       if (injectionPorts.nonEmpty) {
         Component.current.addPrePopTask(() => new Composite(this, "port"){

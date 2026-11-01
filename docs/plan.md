@@ -300,9 +300,14 @@ Goal: every Thumb instruction that doesn't need the flags runs in hardware, howe
 - **Faults partway through** an instruction restart it from op 0. Expansions must stay restartable: the base register or SP is updated last. A test checks every expansion for this.
 
 **Steps:**
-1. **Sequencer, PC-hold and the two-op instructions.** The register-offset loads and stores, `LDR` (literal), `ADR`, `BICS`, `SXTH`/`SXTB`/`UXTH`, long `BL`, and `MOV`/`ADD`/`BX`/`BLX` with the PC. These are short, fixed sequences, enough to build and prove the sequencer on.
+1. **Sequencer, PC-hold and the two-op instructions.** (done) The register-offset loads and stores, `LDR` (literal), `ADR`, `BICS`, `SXTH`/`SXTB`/`UXTH`, long `BL`, and `MOV`/`ADD`/`BX`/`BLX` with the PC. These are short, fixed sequences, enough to build and prove the sequencer on.
    - The lockstep compares Thumb code one op at a time: the RTL retires each op as its own record with the Thumb instruction's PC, and the model gains a per-op step to match.
    - The exhaustive check extends to whole sequences: the standalone expander gets `step` and `pc[1]` inputs, and every 16-bit instruction is compared op by op, `last` included, at both PC alignments.
+   - **Done:**
+     - The sequencer and PC-hold, as designed, in the fetcher's injector. Interrupt gating is in too; its test comes in step 4.
+     - The 3.1 instructions pass the exhaustive check op by op, and op 0 never depends on the PC's alignment.
+     - An assembled Thumb function of 3.1 instructions runs on the RTL in lockstep with the model, op by op. It covers `LDR` literal at both alignments, `ADR`, all eight register-offset loads and stores, `BICS`, the extends, the PC as an operand, and `ADD pc, rm`.
+     - Cost: about 1,100 LEs (5,038 in all), Fmax 38.9 MHz. The expander in decode is now on the path into execute.
 2. **Register lists:** `PUSH`, `POP` (including `POP {pc}`), `LDM`, `STM`. Op `k` needs the `k`-th register in the list, a priority encoder over the list with the first `k` registers masked.
 3. **The rest:** the register shifts (5 ops each without flags), `REV`/`REV16`/`REVSH`, `MRS`/`MSR` of PRIMASK.
 4. **Interrupts at Thumb boundaries.**
@@ -369,4 +374,4 @@ Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (execut
 
 Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board).
 
-1. Phase 3.1: the sequencer, PC-hold and the two-op instructions.
+1. Phase 3.2: register lists (`PUSH`, `POP`, `LDM`, `STM`).
