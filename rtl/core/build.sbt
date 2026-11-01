@@ -9,4 +9,7 @@ lazy val core = (project in file("."))
     name := "thumbv-core",
     scalaVersion := "2.12.18",   // must match VexRiscv's
     fork := true,
+    // SpinalHDL's compiler plugin, needed by any Scala code that builds hardware
+    // (component scoping and naming); VexRiscv's own build uses it too.
+    addCompilerPlugin("com.github.spinalhdl" %% "spinalhdl-idsl-plugin" % "1.13.0"),
   )

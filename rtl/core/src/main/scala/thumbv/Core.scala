@@ -22,7 +22,7 @@ import vexriscv.{VexRiscv, VexRiscvConfig, plugin}
   */
 object Core {
   def plugins(resetVector: BigInt, mtvec: BigInt) = List(
-    new IBusSimplePlugin(
+    new ThumbIBusSimplePlugin(
       resetVector = resetVector,
       cmdForkOnSecondStage = false,
       cmdForkPersistence = false,
