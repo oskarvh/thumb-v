@@ -316,7 +316,11 @@ Goal: every Thumb instruction that doesn't need the flags runs in hardware, howe
      - a nested call with its own `PUSH`/`POP`;
      - `STM`/`LDM` with write-back, and `LDM` with its base in the list.
    - **Timing fix:** the sequencer now takes decode's op and `last` from registers. The new population counts had made `last` the critical path (31 MHz), through `decodeInput.ready` to the fetch PC. Now 33.9 MHz and 5,275 LEs.
-3. **The rest:** the register shifts (5 ops each without flags), `REV`/`REV16`/`REVSH`, `MRS`/`MSR` of PRIMASK.
+3. **The rest:** the register shifts (5 ops each without flags), `REV`/`REV16`/`REVSH`, `MRS`/`MSR` of PRIMASK. (done)
+   - **Coverage:** the RTL now expands every instruction exactly as the model does in result-only mode. The exhaustive check no longer has a list of what's implemented; everything must match.
+   - **In the core:** an assembled Thumb function runs in lockstep, with all four register shifts at amounts 0, 1, 31, 32, 33 and 256, the three byte reversals, and PRIMASK through `MSR`, `MRS`, `CPSID` and `CPSIE`.
+   - **A model fix the lockstep found:** `mstatus.MPP` now reads as machine mode (`0x1800`), as on VexRiscv, a machine-mode-only core.
+   - **Cost:** 5,614 LEs, Fmax 33.3 MHz.
 4. **Interrupts at Thumb boundaries.**
    - **Interrupt source:** the testbench drives the core's timer interrupt from a plusarg schedule, in simulation only. The interrupt controller comes in Phase 5.
    - **Test:** a program with a trap handler that records `mepc` runs Thumb code under interrupts every few cycles. It must give the same result as without interrupts, and every recorded `mepc` must be the start of a Thumb instruction (or a RISC-V instruction).
@@ -381,4 +385,4 @@ Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (execut
 
 Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board).
 
-1. Phase 3.3: the register shifts, `REV`/`REV16`/`REVSH`, `MRS`/`MSR` of PRIMASK.
+1. Phase 3.4: interrupts at Thumb boundaries, tested in simulation.

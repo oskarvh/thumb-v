@@ -74,7 +74,7 @@ class Machine:
     def __init__(self, thumb_regions=(), options: expander.Options = expander.Options()):
         self.x = [0] * 32
         self.pc = 0
-        self.mstatus = 0
+        self.mstatus = r.MSTATUS_MPP
         self.mem = Memory()
         self.thumb_regions = list(thumb_regions)  # [(base, limit)): fixed regions, set by the loader
         self.region_csrs = [0] * (2 * r.THUMB_REGIONS)   # the hardware's region CSRs, see rv32.py
@@ -250,7 +250,7 @@ class Machine:
             # Writes are skipped when rs1/uimm is 0 for the set/clear forms.
             if f3 & 3 == 1 or rs1:
                 if csr == r.MSTATUS:
-                    self.mstatus = new & MASK
+                    self.mstatus = (new & MASK) | r.MSTATUS_MPP
                 else:
                     self.region_csrs[csr - r.THUMB_REGION0] = new & MASK & ~3
             self._set(rd, old)

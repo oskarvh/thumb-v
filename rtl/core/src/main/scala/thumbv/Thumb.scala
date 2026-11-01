@@ -14,6 +14,8 @@ object Rv {
   def SP = U(2, 5 bits)
   def T1 = U(6, 5 bits)     // expander temporaries (model/thumbv/regmap.py)
   def T2 = U(7, 5 bits)
+  def T3 = U(14, 5 bits)
+  def T4 = U(15, 5 bits)
 
   def ILLEGAL = B(0x00000000L, 32 bits)
   def NOP     = B(0x00000013L, 32 bits)   // addi x0, x0, 0
@@ -58,12 +60,18 @@ object Rv {
   def or(rd: UInt, rs1: UInt, rs2: UInt)  = r(0x00, 6, rd, rs1, rs2)
   def xor(rd: UInt, rs1: UInt, rs2: UInt) = r(0x00, 4, rd, rs1, rs2)
   def mul(rd: UInt, rs1: UInt, rs2: UInt) = r(0x01, 0, rd, rs1, rs2)
+  def sll(rd: UInt, rs1: UInt, rs2: UInt) = r(0x00, 1, rd, rs1, rs2)
+  def srl(rd: UInt, rs1: UInt, rs2: UInt) = r(0x00, 5, rd, rs1, rs2)
+  def sra(rd: UInt, rs1: UInt, rs2: UInt) = r(0x20, 5, rd, rs1, rs2)
+  def sltiu(rd: UInt, rs1: UInt, imm: Bits) = i(3, rd, rs1, imm)
+  def lui(rd: UInt, imm20: Bits) = u(rd, imm20, 0x37)
+  def csrrs(rd: UInt, csr: Int, rs1: UInt) = i(2, rd, rs1, B(csr, 12 bits), 0x73)
   def addi(rd: UInt, rs1: UInt, imm: Bits) = i(0, rd, rs1, imm)
   def xori(rd: UInt, rs1: UInt, imm: Bits) = i(4, rd, rs1, imm)
   def andi(rd: UInt, rs1: UInt, imm: Bits) = i(7, rd, rs1, imm)
-  def slli(rd: UInt, rs1: UInt, shamt: UInt) = r(0x00, 1, rd, rs1, shamt, 0x13)
-  def srli(rd: UInt, rs1: UInt, shamt: UInt) = r(0x00, 5, rd, rs1, shamt, 0x13)
-  def srai(rd: UInt, rs1: UInt, shamt: UInt) = r(0x20, 5, rd, rs1, shamt, 0x13)
+  def slli(rd: UInt, rs1: UInt, shamt: UInt) = r(0x00, 1, rd, rs1, shamt.resize(5), 0x13)
+  def srli(rd: UInt, rs1: UInt, shamt: UInt) = r(0x00, 5, rd, rs1, shamt.resize(5), 0x13)
+  def srai(rd: UInt, rs1: UInt, shamt: UInt) = r(0x20, 5, rd, rs1, shamt.resize(5), 0x13)
   def lb(rd: UInt, rs1: UInt, off: Bits)  = i(0, rd, rs1, off, 0x03)
   def lh(rd: UInt, rs1: UInt, off: Bits)  = i(1, rd, rs1, off, 0x03)
   def lw(rd: UInt, rs1: UInt, off: Bits)  = i(2, rd, rs1, off, 0x03)
@@ -150,11 +158,11 @@ object Thumb {
     * 32-bit instructions; pc1 is bit 1 of the instruction's address).
     *
     * The model, model/thumbv/expander.py with Options(flags = "none"), is the
-    * reference, op for op and bit for bit. Implemented so far: every
-    * single-op expansion (Phase 2.2) and, from Phase 3.1, the two- to
-    * five-op ones listed in docs/core.md. Everything else is the all-zero
-    * illegal instruction. tests/test_expander_rtl.py checks this against the
-    * model for every 16-bit instruction, at both alignments.
+    * reference, op for op and bit for bit, for every instruction (since
+    * Phase 3.3). Instructions that read the flags (ADCS, SBCS, B<cond>, the
+    * APSR) are the all-zero illegal instruction until the flags unit, as in
+    * the model. tests/test_expander_rtl.py checks this for every 16-bit
+    * instruction at both alignments, and a large sweep of 32-bit ones.
     */
   def expand(hw1: Bits, hw2: Bits, pc1: Bool, step: UInt): ThumbOp = {
     val result = ThumbOp()
@@ -208,8 +216,25 @@ object Thumb {
           switch(hw(9 downto 6)) {
             is(B"0000") { out := and(r20, r20, r53) }          // ANDS
             is(B"0001") { out := xor(r20, r20, r53) }          // EORS
-            // LSLS, LSRS, ASRS (register): several ops. ADCS, SBCS: read C.
-            // RORS: several ops.
+            // Shifts by a register: the amount is rm[7:0]; 32 and more shift
+            // everything out (LSL, LSR) or behave as 31 (ASR). Results only.
+            is(B"0010") {                                      // LSLS rdn, rm
+              out.seq(andi(T1, r53, B"x0FF"), sll(T4, r20, T1), sltiu(T3, T1, imm(U(32))),
+                      sub(T3, X0, T3), and(r20, T4, T3))
+            }
+            is(B"0011") {                                      // LSRS rdn, rm
+              out.seq(andi(T1, r53, B"x0FF"), srl(T4, r20, T1), sltiu(T3, T1, imm(U(32))),
+                      sub(T3, X0, T3), and(r20, T4, T3))
+            }
+            is(B"0100") {                                      // ASRS rdn, rm
+              out.seq(andi(T1, r53, B"x0FF"), sltiu(T3, T1, imm(U(32))), addi(T3, T3, B"xFFF"),
+                      or(T3, T1, T3), sra(r20, r20, T3))
+            }
+            // ADCS, SBCS: read C, illegal until the flags unit.
+            is(B"0111") {                                      // RORS rdn, rm
+              out.seq(andi(T3, r53, B"x01F"), srl(T4, r20, T3), sub(T3, X0, T3),
+                      sll(T3, r20, T3), or(r20, T4, T3))
+            }
             is(B"1000") { out := NOP }                         // TST
             is(B"1001") { out := sub(r20, X0, r53) }           // RSBS rd, rn, #0
             is(B"1010") { out := NOP }                         // CMP rn, rm
@@ -340,7 +365,25 @@ object Thumb {
             is(B"0011") { out := WFI }
           }
         }
-        // REV, REV16, REVSH: several ops.
+        when(hw(10 downto 8) === B"010") {                     // byte reversal: rd, rm
+          switch(hw(7 downto 6)) {
+            is(B"00") {                                        // REV
+              out.seq(srli(T1, r53, U(24)), slli(T2, r53, U(24)), or(T1, T1, T2),
+                      lui(T3, B"x00010"), addi(T3, T3, B"xF00"),            // T3 = 0x0000FF00
+                      srli(T2, r53, U(8)), and(T2, T2, T3), or(T1, T1, T2),
+                      and(T2, r53, T3), slli(T2, T2, U(8)), or(r20, T1, T2))
+            }
+            is(B"01") {                                        // REV16
+              out.seq(lui(T3, B"x00FF0"), addi(T3, T3, B"x0FF"),            // T3 = 0x00FF00FF
+                      srli(T1, r53, U(8)), and(T1, T1, T3), and(T2, r53, T3),
+                      slli(T2, T2, U(8)), or(r20, T1, T2))
+            }
+            is(B"11") {                                        // REVSH
+              out.seq(slli(T1, r53, U(24)), srai(T1, T1, U(16)), srli(T2, r53, U(8)),
+                      andi(T2, T2, B"x0FF"), or(r20, T1, T2))
+            }
+          }
+        }
       }
 
       // --- Load and store multiple: ooooo nnn rrrrrrrr ------------------------
@@ -408,8 +451,23 @@ object Thumb {
         is(B"x8F6") { out := FENCE_I }
       }
     }
-    // MSR, MRS: illegal without a flags unit (APSR), several ops (PRIMASK) or
-    // emulated by the trap handler (the rest).
+    // MSR, MRS: PRIMASK inline, through mstatus.MIE (PRIMASK = 1 masks, so
+    // MIE = NOT PRIMASK). The APSR is illegal without a flags unit; the other
+    // special registers, and SP or PC as the operand, trap to the handler.
+    val mstatus = 0x300
+    when(hw1(15 downto 4) === B"xF38" && hw2(15 downto 8) === B"x88") {     // MSR spec_reg, rn
+      val n = hw1(3 downto 0)
+      when(hw2(7 downto 0) === 16 && n =/= 13 && n =/= 15) {
+        out.seq(andi(T1, reg(n), B"x001"), xori(T1, T1, B"x001"), slli(T1, T1, U(3)),
+                CSRRCI_MSTATUS_MIE, csrrs(X0, mstatus, T1))
+      }
+    }
+    when(hw1 === B"xF3EF" && hw2(15 downto 12) === B"1000") {               // MRS rd, spec_reg
+      val d = hw2(11 downto 8)
+      when(hw2(7 downto 0) === 16 && d =/= 13 && d =/= 15) {
+        out.seq(csrrs(T1, mstatus, X0), srli(T1, T1, U(3)), andi(T1, T1, B"x001"), xori(reg(d), T1, B"x001"))
+      }
+    }
     out.result
   }
 }

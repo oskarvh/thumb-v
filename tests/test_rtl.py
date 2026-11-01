@@ -149,6 +149,18 @@ def test_thumb_register_lists(rtl_simulator, build_mixed, tmp_path):
     assert longest["STM"] == 5 and longest["LDM"] == 4
 
 
+def test_thumb_shifts_reversals_primask(rtl_simulator, build_mixed, tmp_path):
+    """Phase 3.3: shifts by a register, REV*, MSR/MRS of PRIMASK."""
+    rv_elf, thumb_elf = build_mixed(["rtl_thumb_misc.S"], ["rtl_thumb_misc_main.c"])
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    names = {name for (pc, name), n in thumb_instructions_run(images, result).items()}
+    assert names >= {"LSLS_reg", "LSRS_reg", "ASRS_reg", "RORS", "REV", "REV16", "REVSH",
+                     "MSR", "MRS", "CPSID", "CPSIE"}
+
+
 def single_op_violations(thumb_image):
     """Instructions in a Thumb image's code that the 2.2 expander can't run yet."""
     out = []

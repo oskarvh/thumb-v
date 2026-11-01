@@ -12,6 +12,7 @@ MSTATUS = 0x300
 THUMB_REGION0 = 0x7C0
 THUMB_REGIONS = 2
 MSTATUS_MIE = 1 << 3
+MSTATUS_MPP = 3 << 11   # machine mode, the only one: hard-wired, as on VexRiscv
 
 _LOAD, _STORE, _BRANCH, _JALR, _JAL = 0x03, 0x23, 0x63, 0x67, 0x6F
 _OP_IMM, _OP, _LUI, _AUIPC = 0x13, 0x33, 0x37, 0x17

@@ -117,7 +117,7 @@ flowchart TB
 | Mode select, Thumb length rule in the aligner | `ThumbFetcher.scala`, marked `THUMBV` | built | 2.1 |
 | Thumb region CSRs | `rtl/core/.../ThumbRegionPlugin.scala` | built | 2.1 |
 | Expander, single ops | `rtl/core/.../Thumb.scala` | built: every instruction whose expansion is one op, results only; checked exhaustively against the model | 2.2 (2.1: a stub) |
-| Expander, multi-op | `Thumb.scala` | two- to five-op instructions (3.1) and register lists (3.2) built; the rest (3.3) planned | 3.1 |
+| Expander, multi-op | `Thumb.scala` | built: every result-only expansion (3.1–3.3), checked op by op against the model | 3.1 |
 | Expander alone, for the exhaustive check | `ThumbExpander` in `Thumb.scala`, `sim/expander_tb.sv` | built, simulation only | 2.3 |
 | Sequencer, PC hold | `ThumbFetcher.scala`, marked `THUMBV` | built | 3.1 |
 | Interrupt gating | `ThumbFetcher.scala`, through `InterruptionInhibitor` | built, untested until the testbench raises interrupts (3.4) | 3.1 |

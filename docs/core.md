@@ -84,7 +84,13 @@ In the injector, the sequencer (Phase 3.1, [vexriscv-notes.md](vexriscv-notes.md
   - **`LDM`:** loads each register from its own slot. With the base register in the list, there's no write-back and the base is loaded last.
 
   Each takes one op per register plus one. Op k uses the k-th register in the list: a population count per list position, compared with `step`.
-- **Everything else:** the remaining multi-op instructions (the register shifts, `REV`/`REV16`/`REVSH`, `MRS`/`MSR` of PRIMASK until 3.3), undefined encodings and `UDF` become the all-zero illegal instruction. They trap with `mepc` at their own address.
+- **The rest (Phase 3.3):**
+  - shifts by a register (5 ops each, results only; the amount is `rm[7:0]`);
+  - `REV` (11 ops), `REV16` (7) and `REVSH` (5);
+  - `MSR`/`MRS` of PRIMASK, through `mstatus.MIE` (5 and 4 ops).
+
+  With these, the RTL expands every instruction the model does in result-only mode.
+- **Everything else:** the instructions that read the flags (`ADCS`, `SBCS`, `B<cond>`, `MRS`/`MSR` of the APSR) until Phase 4, `MRS`/`MSR` of the other special registers (the trap handler's job, Q7), undefined encodings and `UDF` become the all-zero illegal instruction. They trap with `mepc` at their own address.
 - **The check:** `tests/test_expander_rtl.py` compares the expander, generated on its own as `ThumbExpander.v`, against the model op by op: every 16-bit instruction at both PC alignments and about 518,000 32-bit instructions ([architecture.md](architecture.md)).
 
 Not included yet:
