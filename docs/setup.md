@@ -29,7 +29,7 @@ Tests skip when a cross toolchain is missing. Set `THUMBV_REQUIRE_TOOLS=1` to ma
 | `make test-slow` | Also run the slow tests: CoreMark and Embench in lockstep, 500 more random programs (about 5 min) |
 | `make measure` | Cost the flags strategies over all benchmarks and print the table in [flags-decision.md](flags-decision.md) (about 20 s) |
 | `make core` | Generate the VexRiscv core into `build/rtl/` and lint it (Phase 1, needs sbt and Verilator) |
-| `make test-rtl` | Run programs on the SoC in Verilator, in lockstep with the model ([soc.md](soc.md)); fails instead of skipping if a tool is missing |
+| `make test-rtl` | The RTL tests in Verilator: programs on the SoC in lockstep with the model ([soc.md](soc.md)) and the exhaustive expander check; fails instead of skipping if a tool is missing |
 | `make board` | Run hello world, or `ELF=program.elf`, on the CYC1000 and print its UART output ([board.md](board.md)); needs Quartus and openFPGALoader |
 | `make clean` | Remove `build/` and Python caches |
 
