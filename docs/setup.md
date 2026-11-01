@@ -58,7 +58,9 @@ THUMBV_REQUIRE_TOOLS=1 make test      # fail instead of skip when a toolchain is
 | `test_benchmarks.py` | CoreMark, Embench IoT and the soft-float kernels for Cortex-M0 |
 | `test_interwork.py` | Interface parsing, both ABIs' layouts, and generated thunks in a program built three ways |
 | `test_measure.py` | The 0.7 measurements: cost breakdown against the expander, flag liveness, lookahead safety |
-| `test_rtl.py` | RISC-V programs on the SoC in Verilator, in lockstep with the model (skipped without Verilator and sbt) |
+| `test_rtl.py` | Programs on the SoC in Verilator, in lockstep with the model: RISC-V, the Thumb mode switch, single-op Thumb code (skipped without Verilator and sbt) |
+| `test_expander_rtl.py` | The RTL expander against the model, for every 16-bit Thumb instruction and a large sweep of 32-bit ones (skipped without Verilator and sbt) |
+| `test_flags_none.py` | The model's result-only flags mode (the hardware's until Phase 4) against strategy A |
 
 The build recipes for all of these are in `model/thumbv/build.py`, so scripts outside the tests can build the same programs.
 

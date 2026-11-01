@@ -30,6 +30,7 @@ measure:
 core:
 	cd rtl/core && sbt -batch "runMain thumbv.GenCore $(CURDIR)/build/rtl"
 	verilator --lint-only --top-module VexRiscv build/rtl/VexRiscv.v
+	verilator --lint-only --top-module ThumbExpander build/rtl/ThumbExpander.v
 	verilator --lint-only --top-module thumbv_soc build/rtl/VexRiscv.v rtl/soc/*.v
 
 test-rtl: core

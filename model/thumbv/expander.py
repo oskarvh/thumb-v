@@ -14,7 +14,11 @@ words, following docs/isa-coverage.md. Rules every sequence obeys:
   between Thumb instructions (D3).
 
 Flags follow strategy A: N, Z, C and V each held as 0 or 1 in their own
-register (regmap.FN/FZ/FC/FV).
+register (regmap.FN/FZ/FC/FV). `Options.flags = "none"` is the hardware's
+interim mode until its flags unit (Phase 4): flag-setting instructions
+compute only their result, compares do nothing, and instructions that read
+the flags (ADCS, SBCS, B<cond>, MRS/MSR of the APSR) are illegal, so code
+that depends on flags traps instead of going wrong.
 """
 
 from dataclasses import dataclass
@@ -27,6 +31,11 @@ from .regmap import FC, FN, FV, FZ, LR, PC, SP, T1, T2, T3, T4, T5, T6, rv
 @dataclass(frozen=True)
 class Options:
     exact_lr: bool = False  # set bit 0 of LR on BL/BLX, as a real Cortex-M does
+    flags: str = "A"        # "A": strategy A; "none": results only (see above)
+
+    def __post_init__(self):
+        if self.flags not in ("A", "none"):
+            raise ValueError(f"unknown flags mode {self.flags!r}")
 
 
 @dataclass(frozen=True)
@@ -103,11 +112,14 @@ def _sub_cv(a, b, res, imm=None):
     ]
 
 
-def _with_flags(rd, sources, compute, cv):
+def _with_flags(o, rd, sources, compute, cv):
     """Compute into rd (or T1 if rd is also a source), set NZCV, then move to rd.
 
     `rd` is None for compare instructions, whose result only feeds the flags.
+    Without flags, just the result; a compare does nothing.
     """
+    if o.flags == "none":
+        return compute(rd) if rd is not None else [r.nop()]
     dst = rd if rd is not None and rd not in sources else T1
     ops = compute(dst) + _nz(dst) + cv(dst)
     if rd is not None and dst != rd:
@@ -132,6 +144,20 @@ def _adc(rd, a, b):
     ]
 
 
+def _result(o, result, flag_ops):
+    """`result` alone without flags, else `result` and the flag ops.
+
+    Each is a list; `flag_ops` is a function of nothing, so it isn't built
+    when unused. The order (flag ops around the result) is the caller's.
+    """
+    return result if o.flags == "none" else flag_ops()
+
+
+def _reads_flags(o):
+    """Without flags, instructions that read them are illegal."""
+    return o.flags == "none"
+
+
 def _keep_c_if_zero_amount(new_c, amount):
     """FC = new_c, unless the shift amount is 0, which leaves C unchanged."""
     return [
@@ -148,13 +174,14 @@ def _keep_c_if_zero_amount(new_c, amount):
 @_handles("LSLS_imm")
 def _lsls_imm(f, pc, o):
     rd, rm, k = rv(f["d"]), rv(f["m"]), f["i"]  # k != 0: k == 0 decodes as MOVS_reg
-    return [r.srli(FC, rm, 32 - k), r.andi(FC, FC, 1), r.slli(rd, rm, k), *_nz(rd)]
+    return _result(o, [r.slli(rd, rm, k)],
+                   lambda: [r.srli(FC, rm, 32 - k), r.andi(FC, FC, 1), r.slli(rd, rm, k), *_nz(rd)])
 
 
 @_handles("MOVS_reg")
 def _movs_reg(f, pc, o):
     rd, rm = rv(f["d"]), rv(f["m"])
-    return [r.mv(rd, rm), *_nz(rd)]
+    return _result(o, [r.mv(rd, rm)], lambda: [r.mv(rd, rm), *_nz(rd)])
 
 
 @_handles("LSRS_imm", "ASRS_imm")
@@ -165,20 +192,20 @@ def _shift_right_imm(f, pc, o):
         result = r.addi(rd, 0, 0) if k == 32 else r.srli(rd, rm, k)
     else:
         result = r.srai(rd, rm, min(k, 31))
-    return [r.srli(FC, rm, k - 1), r.andi(FC, FC, 1), result, *_nz(rd)]
+    return _result(o, [result], lambda: [r.srli(FC, rm, k - 1), r.andi(FC, FC, 1), result, *_nz(rd)])
 
 
 @_handles("ADDS_reg")
 def _adds_reg(f, pc, o):
     rd, rn, rm = rv(f["d"]), rv(f["n"]), rv(f["m"])
-    return _with_flags(rd, (rn, rm), lambda d: [r.add(d, rn, rm)],
+    return _with_flags(o, rd, (rn, rm), lambda d: [r.add(d, rn, rm)],
                        lambda d: _add_cv(rn, rm, d))
 
 
 @_handles("SUBS_reg")
 def _subs_reg(f, pc, o):
     rd, rn, rm = rv(f["d"]), rv(f["n"]), rv(f["m"])
-    return _with_flags(rd, (rn, rm), lambda d: [r.sub(d, rn, rm)],
+    return _with_flags(o, rd, (rn, rm), lambda d: [r.sub(d, rn, rm)],
                        lambda d: _sub_cv(rn, rm, d))
 
 
@@ -187,7 +214,7 @@ def _adds_imm(f, pc, o):
     rd = rv(f["d"])
     rn = rv(f["n"]) if "n" in f else rd
     imm = f["i"]
-    return _with_flags(rd, (rn,), lambda d: [r.addi(d, rn, imm)],
+    return _with_flags(o, rd, (rn,), lambda d: [r.addi(d, rn, imm)],
                        lambda d: _add_cv(rn, None, d, imm=imm))
 
 
@@ -196,20 +223,20 @@ def _subs_imm(f, pc, o):
     rd = rv(f["d"])
     rn = rv(f["n"]) if "n" in f else rd
     imm = f["i"]
-    return _with_flags(rd, (rn,), lambda d: [r.addi(d, rn, -imm)],
+    return _with_flags(o, rd, (rn,), lambda d: [r.addi(d, rn, -imm)],
                        lambda d: _sub_cv(rn, None, d, imm=imm))
 
 
 @_handles("MOVS_imm")
 def _movs_imm(f, pc, o):
     rd = rv(f["d"])
-    return [r.addi(rd, 0, f["i"]), *_nz(rd)]
+    return _result(o, [r.addi(rd, 0, f["i"])], lambda: [r.addi(rd, 0, f["i"]), *_nz(rd)])
 
 
 @_handles("CMP_imm")
 def _cmp_imm(f, pc, o):
     rn, imm = rv(f["n"]), f["i"]
-    return _with_flags(None, (), lambda d: [r.addi(d, rn, -imm)],
+    return _with_flags(o, None, (), lambda d: [r.addi(d, rn, -imm)],
                        lambda d: _sub_cv(rn, None, d, imm=imm))
 
 
@@ -221,69 +248,78 @@ _LOGICAL = {"ANDS": r.and_, "EORS": r.xor, "ORRS": r.or_}
 @_handles(*_LOGICAL)
 def _logical(f, pc, o):
     rdn, rm = rv(f["d"]), rv(f["m"])
-    return [_LOGICAL[f["_name"]](rdn, rdn, rm), *_nz(rdn)]
+    op = _LOGICAL[f["_name"]](rdn, rdn, rm)
+    return _result(o, [op], lambda: [op, *_nz(rdn)])
 
 
 @_handles("BICS")
 def _bics(f, pc, o):
     rdn, rm = rv(f["d"]), rv(f["m"])
-    return [r.xori(T1, rm, -1), r.and_(rdn, rdn, T1), *_nz(rdn)]
+    ops = [r.xori(T1, rm, -1), r.and_(rdn, rdn, T1)]
+    return _result(o, ops, lambda: [*ops, *_nz(rdn)])
 
 
 @_handles("MVNS")
 def _mvns(f, pc, o):
     rd, rm = rv(f["d"]), rv(f["m"])
-    return [r.xori(rd, rm, -1), *_nz(rd)]
+    return _result(o, [r.xori(rd, rm, -1)], lambda: [r.xori(rd, rm, -1), *_nz(rd)])
 
 
 @_handles("MULS")
 def _muls(f, pc, o):
     rdm, rn = rv(f["d"]), rv(f["n"])
-    return [r.mul(rdm, rn, rdm), *_nz(rdm)]
+    return _result(o, [r.mul(rdm, rn, rdm)], lambda: [r.mul(rdm, rn, rdm), *_nz(rdm)])
 
 
 @_handles("TST")
 def _tst(f, pc, o):
     rn, rm = rv(f["n"]), rv(f["m"])
-    return [r.and_(T1, rn, rm), *_nz(T1)]
+    return _result(o, [r.nop()], lambda: [r.and_(T1, rn, rm), *_nz(T1)])
 
 
 @_handles("RSBS")
 def _rsbs(f, pc, o):
     rd, rn = rv(f["d"]), rv(f["n"])
-    return _with_flags(rd, (rn,), lambda d: [r.sub(d, 0, rn)],
+    return _with_flags(o, rd, (rn,), lambda d: [r.sub(d, 0, rn)],
                        lambda d: _sub_cv(0, rn, d))
 
 
 @_handles("CMP_reg")
 def _cmp_reg(f, pc, o):
     rn, rm = rv(f["n"]), rv(f["m"])
-    return _with_flags(None, (), lambda d: [r.sub(d, rn, rm)],
+    return _with_flags(o, None, (), lambda d: [r.sub(d, rn, rm)],
                        lambda d: _sub_cv(rn, rm, d))
 
 
 @_handles("CMN")
 def _cmn(f, pc, o):
     rn, rm = rv(f["n"]), rv(f["m"])
-    return _with_flags(None, (), lambda d: [r.add(d, rn, rm)],
+    return _with_flags(o, None, (), lambda d: [r.add(d, rn, rm)],
                        lambda d: _add_cv(rn, rm, d))
 
 
 @_handles("ADCS")
 def _adcs(f, pc, o):
     rdn, rm = rv(f["d"]), rv(f["m"])
+    if _reads_flags(o):
+        return [r.ILLEGAL]
     return _adc(rdn, rdn, rm)
 
 
 @_handles("SBCS")
 def _sbcs(f, pc, o):
     rdn, rm = rv(f["d"]), rv(f["m"])
+    if _reads_flags(o):
+        return [r.ILLEGAL]
     return [r.xori(T4, rm, -1), *_adc(rdn, rdn, T4)]
 
 
 @_handles("LSLS_reg")
 def _lsls_reg(f, pc, o):
     rdn, rm = rv(f["d"]), rv(f["m"])
+    if o.flags == "none":   # zero for amounts of 32 and more
+        return [r.andi(T1, rm, 255), r.sll(T4, rdn, T1), r.sltiu(T3, T1, 32), r.sub(T3, 0, T3),
+                r.and_(rdn, T4, T3)]
     return [
         r.andi(T1, rm, 255),           # ARM's amount: rm[7:0]
         # C candidate: bit (32 - amount) for amounts 1-32, 0 above 32.
@@ -306,6 +342,9 @@ def _lsls_reg(f, pc, o):
 @_handles("LSRS_reg")
 def _lsrs_reg(f, pc, o):
     rdn, rm = rv(f["d"]), rv(f["m"])
+    if o.flags == "none":
+        return [r.andi(T1, rm, 255), r.srl(T4, rdn, T1), r.sltiu(T3, T1, 32), r.sub(T3, 0, T3),
+                r.and_(rdn, T4, T3)]
     return [
         r.andi(T1, rm, 255),
         # C candidate: bit (amount - 1) for amounts 1-32, 0 above 32.
@@ -327,6 +366,9 @@ def _lsrs_reg(f, pc, o):
 @_handles("ASRS_reg")
 def _asrs_reg(f, pc, o):
     rdn, rm = rv(f["d"]), rv(f["m"])
+    if o.flags == "none":   # amounts of 32 and more behave as 31
+        return [r.andi(T1, rm, 255), r.sltiu(T3, T1, 32), r.addi(T3, T3, -1), r.or_(T3, T1, T3),
+                r.sra(rdn, rdn, T3)]
     return [
         r.andi(T1, rm, 255),
         # C candidate: bit min(amount - 1, 31). Saturate: OR with -1 if >= 32.
@@ -350,6 +392,9 @@ def _asrs_reg(f, pc, o):
 @_handles("RORS")
 def _rors(f, pc, o):
     rdn, rm = rv(f["d"]), rv(f["m"])
+    if o.flags == "none":
+        return [r.andi(T3, rm, 31), r.srl(T4, rdn, T3), r.sub(T3, 0, T3), r.sll(T3, rdn, T3),
+                r.or_(rdn, T4, T3)]
     return [
         r.andi(T1, rm, 255),
         r.andi(T3, T1, 31),
@@ -380,7 +425,9 @@ def _add_hi(f, pc, o):
 def _cmp_hi(f, pc, o):
     read_n, rn = _read(f["N"] << 3 | f["n"], T2)
     read_m, rm = _read(f["m"], T3)
-    return read_n + read_m + _with_flags(None, (), lambda d: [r.sub(d, rn, rm)],
+    if o.flags == "none":
+        return [r.nop()]
+    return read_n + read_m + _with_flags(o, None, (), lambda d: [r.sub(d, rn, rm)],
                                          lambda d: _sub_cv(rn, rm, d))
 
 
@@ -640,6 +687,8 @@ def _cond_branch(cond, off):
 
 @_handles("B_cond")
 def _b_cond(f, pc, o):
+    if _reads_flags(o):
+        return [r.ILLEGAL]
     return _cond_branch(f["c"], _sext(f["i"], 8) * 2 + 4)
 
 
@@ -684,6 +733,8 @@ def _msr(f, pc, o):
         return [r.ILLEGAL]
     rn = rv(n)
     if sysm == _APSR:
+        if _reads_flags(o):     # writes them, but without a flags unit there's nowhere to put them
+            return [r.ILLEGAL]
         return [
             r.srli(FN, rn, 31),
             r.srli(FZ, rn, 30), r.andi(FZ, FZ, 1),
@@ -708,6 +759,8 @@ def _mrs(f, pc, o):
         return [r.ILLEGAL]
     rd = rv(d)
     if sysm == _APSR:
+        if _reads_flags(o):
+            return [r.ILLEGAL]
         return [
             r.slli(T1, FN, 31),
             r.slli(T2, FZ, 30), r.or_(T1, T1, T2),

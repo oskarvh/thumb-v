@@ -55,7 +55,17 @@ So far, all of them are in the decompressor ([vexriscv-notes.md](vexriscv-notes.
 - **After a write:** instructions already fetched were decoded in the old mode, so software follows a write with `fence.i`.
 - **Reference:** the model's `Machine.region_csrs` (`model/thumbv/machine.py`).
 
-**The expander** (`Thumb.scala`) is a stub in 2.1. It expands `NOP`, `BX LR`, `DMB`/`DSB` and `ISB`, just enough to test the mode switch. Every other Thumb instruction becomes the all-zero illegal instruction and traps, with `mepc` at its own address. 2.2 replaces it with a translation of `model/thumbv/expander.py`.
+**The expander** (`Thumb.scala`, Phase 2.2) turns each Thumb instruction into one RV32 op.
+- **What it covers:** every instruction whose expansion in the model is a single op, with the model's `Options(flags="none")`, bit for bit. That is 39,056 of the 63,488 16-bit halfwords, `BL` within ±1 MiB, and the barriers. It includes:
+  - all loads and stores with an immediate offset, SP-relative included;
+  - moves, adds and subtracts in every form;
+  - shifts by an immediate, the logical ops, `MULS`, `MVNS` and `RSBS`;
+  - `UXTB`, `ADD`/`SUB sp` and `ADD rd, sp`;
+  - high-register `MOV`/`ADD`, `B`, `BX`, `BLX`;
+  - `SVC`, `BKPT`, `CPSID`/`CPSIE`, `WFI` and the hints.
+- **Results only:** there's no flags unit until Phase 4. Flag-setting instructions compute their result only, compares are `nop`s, and instructions that read the flags (`ADCS`, `SBCS`, `B<cond>`, `MRS`/`MSR` of the APSR) are illegal. So code that depends on flags traps, rather than going wrong.
+- **Everything else:** instructions whose expansion takes several ops (`PUSH`, `POP`, `LDM`, `STM`, register-offset loads and stores, `LDR` literal, `ADR`, the register shifts, `BICS`, the extends, `REV`), undefined encodings and `UDF` become the all-zero illegal instruction. They trap with `mepc` at their own address until the sequencer (Phase 3).
+- **The check:** `tests/test_expander_rtl.py` compares the expander, generated on its own as `ThumbExpander.v`, against the model for all of the 16-bit space and about 518,000 32-bit instructions ([architecture.md](architecture.md)).
 
 Not included yet:
 - A debug module (JTAG). Useful for board bring-up in Phase 1.4.

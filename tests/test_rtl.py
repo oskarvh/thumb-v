@@ -81,7 +81,21 @@ def test_thumb_mode_switch(rtl_simulator, tmp_path):
 def test_thumb_illegal_traps_at_its_address(rtl_simulator, tmp_path):
     image = build_rv_asm("rtl_thumb_illegal.S", tmp_path)
     result = run([image], tmp_path)
-    assert result.a0 == image.symbols["thumb_movs"]
+    assert result.a0 == image.symbols["thumb_udf"]
+
+
+def test_thumb_single_ops(rtl_simulator, build_mixed, tmp_path):
+    """Phase 2.2: an assembled Thumb function of single-op instructions, called
+    from RISC-V, in lockstep with the model (results only, no flags)."""
+    rv_elf, thumb_elf = build_mixed(["rtl_thumb_ops.S"], ["rtl_thumb_ops_main.c"])
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    model = lockstep.simulate(images, stop=images[0].symbols["done"], options=rtlsim.HARDWARE)
+    assert result.a0 == model.final_regs[0]
+    in_thumb = sum(1 for r in result.trace if 0x1_0000 <= r.pc < 0x2_0000)
+    assert in_thumb > 80                    # both calls ran in Thumb mode
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
 
 
 def test_board_memories(rtl_simulator, build_c, tmp_path):

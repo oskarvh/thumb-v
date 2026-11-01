@@ -94,8 +94,11 @@ object Core {
     new VexRiscv(VexRiscvConfig(plugins = plugins(resetVector, mtvec)))
 }
 
-/** sbt "runMain thumbv.GenCore <output directory>" */
+/** sbt "runMain thumbv.GenCore <output directory>": the core (VexRiscv.v) and,
+  * for the exhaustive check against the model, the expander alone
+  * (ThumbExpander.v). */
 object GenCore extends App {
   val out = if (args.nonEmpty) args(0) else "."
   SpinalConfig(targetDirectory = out).generateVerilog(Core())
+  SpinalConfig(targetDirectory = out).generateVerilog(new ThumbExpander)
 }

@@ -254,8 +254,20 @@ Goal: a RISC-V program calls its first Thumb function in hardware.
    - A stub expander (`NOP`, `BX LR`, barriers) is enough for a RISC-V program to call Thumb code and return. That test covers 16- and 32-bit instructions at both alignments, a 32-bit instruction straddling two words, and entry at a halfword. It runs in lockstep with the model.
    - Unexpanded Thumb instructions trap at their own address.
    - Cost: 385 LEs.
-2. Combinational expander for the 1:1 subset: loads and stores with immediate offset, hi-register `MOV`/`ADD`, SP-relative ops, `B`, `BX`, `BL`/`BLX`. Flag-setting instructions compute their result only; flags come in Phase 4.
-3. **Exhaustive equivalence test.** Drive all 65,536 halfwords (plus the 32-bit encodings), at both PC alignments, through the RTL expander and compare against `model/expander.py`.
+2. Combinational expander for the 1:1 subset: loads and stores with immediate offset, hi-register `MOV`/`ADD`, SP-relative ops, `B`, `BX`, `BL`/`BLX`. Flag-setting instructions compute their result only; flags come in Phase 4. (done)
+   - **The rule:** every instruction whose model expansion is a single op, bit for bit; the illegal instruction for the rest.
+   - **"Results only" is in the model:** `Options(flags="none")`, checked against strategy A. Instructions that read the flags are illegal in that mode, so they trap instead of computing wrong values.
+   - **Coverage:** 39,056 of the 63,488 16-bit halfwords ([core.md](core.md#thumb-v-changes)).
+   - **In the core:** an assembled Thumb function of 82 single-op instructions, called from RISC-V, runs on the RTL in lockstep with the model.
+   - **Cost:** about 600 LEs, and Fmax 42.8 MHz. The critical path is now code RAM → aligner → expander → register file read address, as predicted in the risks.
+3. **Exhaustive equivalence test.** Drive all 65,536 halfwords (plus the 32-bit encodings), at both PC alignments, through the RTL expander and compare against `model/expander.py`. (done)
+   - **16-bit:** all of the 16-bit space, with random second halfwords.
+   - **32-bit:** about 518,000 instructions:
+     - every first halfword with 16 random second halfwords;
+     - every second halfword for the `BL`, barrier, `MSR`/`MRS` and undefined first halfwords;
+     - `BL`'s range boundary.
+   - **PC alignment:** the model is checked at both alignments, and single-op expansions don't depend on it.
+   - **Speed:** 9 s, so it runs in every `make test` (`tests/test_expander_rtl.py`).
 4. Integration test: a RISC-V `main` calls a Thumb function compiled by `arm-none-eabi-gcc` that uses only this subset (e.g. a memory copy or table lookup without conditional branches). The Thumb function calls back into a RISC-V function, and the result is printed over UART. Runs in Verilator against the model, then on the board.
 
 **Exit criteria:** exhaustive expander check passes; the mixed call test runs in simulation and on the board.
@@ -308,6 +320,6 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2: 2.1 (mode switch in fetch).
+Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check).
 
-1. Phase 2.2: the expander in RTL for the 1:1 instructions, replacing the 2.1 stub.
+1. Phase 2.4: the mixed C program on the RTL and the board. The board's 32 KiB code RAM can't hold Thumb code at `0x1_0000` and RISC-V code at `0x2_0000` at once, so the shared layout moves the Thumb side to `0x1_4000`. The startup code sets the Thumb region CSRs.

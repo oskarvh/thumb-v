@@ -69,6 +69,37 @@ def simulator(memories: Memories = SIM) -> Path:
     return binary
 
 
+EXPANDER = REPO / "build" / "rtl" / "ThumbExpander.v"
+EXPANDER_SOURCES = [EXPANDER, REPO / "sim" / "expander_tb.sv"]
+
+
+def expander_simulator() -> Path:
+    """The testbench for the expander alone (sim/expander_tb.sv), built if out of date."""
+    if shutil.which("verilator") is None:
+        raise ToolMissing("verilator")
+    if not EXPANDER.exists():
+        if shutil.which("sbt") is None:
+            raise ToolMissing("sbt")
+        subprocess.run(["make", "-C", str(REPO), "core"], check=True, capture_output=True)
+    build_dir = SIM_DIR / "expander"
+    binary = build_dir / "obj_dir" / "expander_tb"
+    if not binary.exists() or binary.stat().st_mtime < max(s.stat().st_mtime for s in EXPANDER_SOURCES):
+        build_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["verilator", "--binary", "--timing", "-j", "0", "--top-module", "expander_tb",
+                        "-o", "expander_tb", *map(str, EXPANDER_SOURCES)],
+                       cwd=build_dir, check=True, capture_output=True)
+    return binary
+
+
+def expand_rtl(instructions, out_dir: Path) -> list[int]:
+    """The RTL expander's op for each (hw1, hw2)."""
+    sim = expander_simulator()
+    inputs, outputs = out_dir / "expander_in.txt", out_dir / "expander_out.txt"
+    inputs.write_text("".join(f"{hw1:04x} {hw2:04x}\n" for hw1, hw2 in instructions))
+    subprocess.run([str(sim), f"+in={inputs}", f"+out={outputs}"], check=True, capture_output=True)
+    return [int(line, 16) for line in outputs.read_text().split()]
+
+
 def memory_images(images, out_dir: Path, memories: Memories = SIM, suffix: str = ".hex") -> tuple[Path, Path]:
     """$readmemh files for the code and data RAMs.
 
@@ -153,10 +184,14 @@ def run(images, out_dir: Path, max_cycles: int = 10_000_000, trace: bool = True,
     return Result(status, int(a0, 16), int(cycles), int(instructions), uart, retired)
 
 
-def lockstep(images, result: Result) -> Divergence | None:
+# The hardware's expander mode until its flags unit (Phase 4): results only.
+HARDWARE = Options(flags="none")
+
+
+def lockstep(images, result: Result, options: Options = HARDWARE) -> Divergence | None:
     """Replay the RTL's retire trace against the model; the first difference, if any."""
     layout = Layout.for_images(images)
-    m = _load_model(images, layout, Options())
+    m = _load_model(images, layout, options)
     m.mem.map(IO_BASE, PAGE)
     m.pc = images[0].entry & ~1
     for step, r in enumerate(result.trace):

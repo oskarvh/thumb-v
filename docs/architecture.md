@@ -64,7 +64,7 @@ flowchart TB
         MODE["mode select<br/>inThumb: fetch word in a region?"]:::thumbv
         ALIGN["aligner<br/>halfword buffer, length rule:<br/>RVC bits 1:0 or Thumb.is32"]:::thumbv
         RVCD["RVC decompressor"]:::copied
-        EXP["Thumb.expand<br/>2.1: stub · 2.2: the 1:1 expander"]:::thumbv
+        EXP["Thumb.expand<br/>one op per Thumb instruction: every single-op<br/>expansion, results only (no flags yet);<br/>anything else becomes the illegal instruction"]:::thumbv
         INJ["injector register<br/>decodeInput"]:::copied
         SEQ["sequencer: N ops per Thumb instruction<br/>holds decodeInput, PC hold, next op's rs1/rs2<br/>Phase 3"]:::planned
         DPC["decodePc<br/>decode PC += IS_RVC ? 2 : 4"]:::copied
@@ -105,6 +105,8 @@ flowchart TB
 
 **Where the PC comes from.** The decode stage's PC isn't carried down from fetch: `decodePc` keeps its own register, which advances by 2 or 4 (`IS_RVC`) when decode consumes an instruction, and is reloaded on jumps. That is what makes PC-hold cheap for multi-op Thumb instructions ([vexriscv-notes.md](vexriscv-notes.md#where-the-pc-comes-from-pc-hold-for-free)).
 
+**The expander is checked on its own.** `make core` also generates `ThumbExpander.v`, the same `Thumb.expand` function as a module of its own. `tests/test_expander_rtl.py` runs every 16-bit Thumb instruction and a large sweep of 32-bit ones through it in Verilator and compares each op with the model. The core uses the function directly, in the fetcher, so the two can't differ.
+
 **Thumb instructions in the pipeline.** After the aligner, a Thumb instruction is an ordinary RV32 op (or, from Phase 3, a short sequence of them), so the pipeline's stock plugins run it unchanged. What Thumb-V adds downstream of fetch is small: the region CSRs, the flags unit and the interrupt gating, each a separate plugin through VexRiscv's services (D5).
 
 ## Status
@@ -115,8 +117,8 @@ flowchart TB
 | Fetcher: fetch PC, iBus stages, RVC decompressor, injector, `decodePc` | `rtl/core/.../ThumbFetcher.scala`, copied | built, unchanged | 2.1 |
 | Mode select, Thumb length rule in the aligner | `ThumbFetcher.scala`, marked `THUMBV` | built | 2.1 |
 | Thumb region CSRs | `rtl/core/.../ThumbRegionPlugin.scala` | built | 2.1 |
-| Expander | `rtl/core/.../Thumb.scala` | stub (`NOP`, `BX LR`, barriers) | 2.1 |
-| Expander for the 1:1 instructions | `Thumb.scala` | planned | 2.2 |
+| Expander, single ops | `rtl/core/.../Thumb.scala` | built: every instruction whose expansion is one op, results only; checked exhaustively against the model | 2.2 (2.1: a stub) |
+| Expander alone, for the exhaustive check | `ThumbExpander` in `Thumb.scala`, `sim/expander_tb.sv` | built, simulation only | 2.3 |
 | Sequencer, PC hold | `ThumbFetcher.scala` | planned | Phase 3 |
 | Interrupt gating | plugin, `InterruptionInhibitor` | planned | Phase 3 |
 | NZCV flags unit | plugin | planned | Phase 4 |
