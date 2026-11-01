@@ -1,6 +1,6 @@
 # The base core
 
-Thumb-V starts from a stock VexRiscv (decision D4), generated from SpinalHDL in a fixed configuration. Nothing in it is patched yet: the Thumb expander, region CSRs and flags unit come in Phases 2–4.
+Thumb-V is VexRiscv (decision D4), generated from SpinalHDL in a fixed configuration, with its instruction fetcher replaced by a Thumb-V copy (D5) and Thumb-V's own plugins added. So far that means the Thumb region CSRs, mode select and the Thumb length rule (Phase 2.1); the expander, sequencer and flags unit come in Phases 2–4. See [Thumb-V changes](#thumb-v-changes).
 
 - **Source:** `rtl/core/src/main/scala/thumbv/Core.scala`, an sbt project that depends on the VexRiscv submodule (`third_party/VexRiscv`, pinned at `baf7dc82`).
 - **Output:** `make core` writes `build/rtl/VexRiscv.v`, one Verilog file of about 5,000 lines. Generated files aren't committed: regenerate them with `make core`.
@@ -11,7 +11,7 @@ VexRiscv is built from plugins. The choices, and why:
 
 | Plugin | Setting | Why |
 |---|---|---|
-| `IBusSimplePlugin` | RVC on (`compressedGen`), no branch prediction, access faults trapped | The Thumb expander goes where the RVC decompressor sits, and Thumb shares RVC's 2-byte fetch granularity (plan section 1). No I-cache for now. |
+| `ThumbIBusSimplePlugin` (a copy of `IBusSimplePlugin`) | RVC on (`compressedGen`), no branch prediction, access faults trapped | The Thumb expander goes where the RVC decompressor sits, and Thumb shares RVC's 2-byte fetch granularity (plan section 1). No I-cache for now. |
 | `DBusSimplePlugin` | misaligned and access faults trapped | The model traps on misaligned accesses, as ARMv6-M faults on them. |
 | `CsrPlugin` | machine mode only; `mstatus`, `mtvec`, `mepc`, `mcause`, `mtval`, `mscratch` read-write; `ecall`, `ebreak`, `wfi` | Thumb `SVC`/`BKPT` become `ecall`/`ebreak`, `CPSID`/`CPSIE` toggle `mstatus.MIE` (PRIMASK), and the trap handler needs all of these. `misa` reads RV32IMC. |
 | `DecoderSimplePlugin` | illegal instructions trapped | The expander emits an illegal instruction for `UDF` and unhandled `MRS`/`MSR`, and the trap handler emulates them (Q7). |
@@ -22,11 +22,40 @@ VexRiscv is built from plugins. The choices, and why:
 | `DivPlugin` | iterative, 1 bit per cycle | ARMv6-M has no divide; only RISC-V code uses it. |
 | `HazardSimplePlugin` | full bypassing | Expansions are long chains of dependent ops. |
 | `BranchPlugin` | branches resolved in execute, misaligned targets trapped, `fence.i` as a jump | With no I-cache, Thumb `ISB` (`fence.i`) only needs a refetch. |
+| `ThumbRegionPlugin` | 2 regions, CSRs `0x7C0`–`0x7C3` | Thumb-V's: see below |
 | `FormalPlugin` | RVFI retire trace | Lockstep against the model in simulation ([soc.md](soc.md)). |
 
 Reset vector `0x0002_0000`, where `tests/link/rv32.ld` puts `_start` (see [soc.md](soc.md)). Trap vector `0x0000_0020` is a placeholder until there is a trap handler; programs can set `mtvec` themselves. Both are parameters of `Core()`.
 
 The core also has an RVFI retire trace port (`FormalPlugin`), which the simulation testbench logs to lockstep the core against the model. The SoC leaves it unconnected, so synthesis prunes it.
+
+## Thumb-V changes
+
+**The fetcher (D5).** `rtl/core/src/main/scala/thumbv/ThumbFetcher.scala` and `ThumbIBusSimplePlugin.scala` are copies of VexRiscv's `Fetcher.scala` and `IBusSimplePlugin` class at the pinned commit. The first commit of the copy generated the same Verilog as the stock core, apart from names. Every change since is marked `THUMBV`, so the changes are:
+```sh
+diff third_party/VexRiscv/src/main/scala/vexriscv/plugin/Fetcher.scala rtl/core/src/main/scala/thumbv/ThumbFetcher.scala
+```
+So far, all of them are in the decompressor ([vexriscv-notes.md](vexriscv-notes.md#instruction-length-and-the-aligner)):
+- **Mode:** the fetch word's address decides Thumb or RISC-V (`ThumbRegionPlugin.inThumb`).
+- **Length:** in Thumb mode, the instruction length comes from the Thumb rule (`Thumb.is32`: the first halfword's bits 15:11 are `11101`, `11110` or `11111`) instead of bits 1:0. "RVC" in the fetcher means 16-bit in either instruction set.
+- **Expansion:** Thumb instructions go through `Thumb.expand` instead of the RVC decompressor. The decode stage's `IS_RVC` is set for 16-bit Thumb instructions, so the PC and link values advance by 2, or by 4 for 32-bit ones.
+
+**The Thumb region CSRs (D7)** (`ThumbRegionPlugin.scala`):
+
+| CSR | Name | |
+|---|---|---|
+| `0x7C0` | `base0` | Region 0 is `[base0, limit0)` |
+| `0x7C1` | `limit0` | |
+| `0x7C2` | `base1` | Region 1 is `[base1, limit1)` |
+| `0x7C3` | `limit1` | |
+
+- **Type:** custom machine-mode read/write CSRs.
+- **Alignment:** word-aligned. The low two bits read as zero, so both halves of a fetched word are always in the same mode.
+- **Reset:** all zero, which means empty regions, so the core starts as a plain RISC-V core.
+- **After a write:** instructions already fetched were decoded in the old mode, so software follows a write with `fence.i`.
+- **Reference:** the model's `Machine.region_csrs` (`model/thumbv/machine.py`).
+
+**The expander** (`Thumb.scala`) is a stub in 2.1. It expands `NOP`, `BX LR`, `DMB`/`DSB` and `ISB`, just enough to test the mode switch. Every other Thumb instruction becomes the all-zero illegal instruction and traps, with `mepc` at its own address. 2.2 replaces it with a translation of `model/thumbv/expander.py`.
 
 Not included yet:
 - A debug module (JTAG). Useful for board bring-up in Phase 1.4.

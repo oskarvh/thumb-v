@@ -7,6 +7,10 @@ RISC-V register numbers (0-31); immediates are checked against their ranges.
 ILLEGAL = 0x00000000  # defined by the RISC-V spec as an illegal instruction
 
 MSTATUS = 0x300
+# Thumb region CSRs (custom machine read/write): base0, limit0, base1, limit1.
+# Region i is [base_i, limit_i), word-aligned; the low two bits read as zero.
+THUMB_REGION0 = 0x7C0
+THUMB_REGIONS = 2
 MSTATUS_MIE = 1 << 3
 
 _LOAD, _STORE, _BRANCH, _JALR, _JAL = 0x03, 0x23, 0x63, 0x67, 0x6F

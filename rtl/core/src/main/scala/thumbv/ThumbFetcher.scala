@@ -261,8 +261,15 @@ abstract class ThumbFetcherImpl(var resetVector : BigInt,
       val bufferValid = RegInit(False)
       val bufferData = Reg(Bits(16 bits))
 
-      val isInputLowRvc = input.rsp.inst(1 downto 0) =/= 3
-      val isInputHighRvc = input.rsp.inst(17 downto 16) =/= 3
+      // THUMBV: Thumb mode by fetch address (ThumbRegionPlugin). Regions are
+      // word-aligned, so the word's address decides for both of its halves.
+      // "Rvc" below means a 16-bit instruction of either set: in Thumb mode
+      // the length comes from Thumb's rule instead of bits 1:0.
+      val thumb = if (pipeline.serviceExist(classOf[ThumbRegionPlugin]))
+        pipeline.service(classOf[ThumbRegionPlugin]).inThumb(input.pc) else False
+      def is16(hw : Bits) : Bool = thumb ? !Thumb.is32(hw) | (hw(1 downto 0) =/= 3)
+      val isInputLowRvc = is16(input.rsp.inst(15 downto 0))
+      val isInputHighRvc = is16(input.rsp.inst(31 downto 16))
       val throw2BytesReg = RegInit(False)
       val throw2Bytes = throw2BytesReg || input.pc(1)
       val unaligned = throw2Bytes || bufferValid
@@ -279,12 +286,15 @@ abstract class ThumbFetcherImpl(var resetVector : BigInt,
         whenTrue = input.rsp.inst(15 downto 0) ## bufferData,
         whenFalse = input.rsp.inst(31 downto 16) ## (throw2BytesPatched ? input.rsp.inst(31 downto 16) | input.rsp.inst(15 downto 0))
       )
-      val isRvc = raw(1 downto 0) =/= 3
+      val isRvc = is16(raw(15 downto 0))   // THUMBV: was raw(1 downto 0) =/= 3
       val decompressed = RvcDecompressor(raw(15 downto 0), pipeline.config.withRvf, pipeline.config.withRvd)
       output.valid := input.valid && !(throw2Bytes && !bufferValid && !isInputHighRvc)
       output.pc := input.pc
       output.isRvc := isRvc
-      output.rsp.inst := isRvc ? decompressed | raw
+      // THUMBV: Thumb instructions go through the expander. IS_RVC (isRvc) is
+      // set for 16-bit Thumb instructions, so the decode PC and link values
+      // advance by 2, and by 4 for 32-bit ones.
+      output.rsp.inst := thumb ? Thumb.expand(raw(15 downto 0), raw(31 downto 16)) | (isRvc ? decompressed | raw)
       input.ready := output.ready && (!iBusRsp.stages.last.input.valid || flushNext || (!(bufferValid && isInputHighRvc) && !(aligned && isInputLowRvc && isInputHighRvc)))
 
       when(output.fire){

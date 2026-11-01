@@ -84,6 +84,7 @@ object Core {
       catchAddressMisaligned = true,
       fenceiGenAsAJump = true           // no instruction cache: fence.i (ISB) just refetches
     ),
+    new ThumbRegionPlugin,             // Thumb region CSRs 0x7C0-0x7C3 (D7)
     new FormalPlugin
   )
 

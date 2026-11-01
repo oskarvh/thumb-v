@@ -146,7 +146,7 @@ For the early phases, use on-chip M9K RAM (~66 KB on the 10CL025) and defer the 
 | D4 | Base core | **Decided** after 1.3: VexRiscv. Every patch point exists, and the PC-hold spike worked in about 30 lines. VexiiRiscv was not evaluated in depth; NEORV32 stays the fallback ([vexriscv-notes.md](vexriscv-notes.md#decisions)) |
 | D5 | Where the expander lives | **Decided** after 1.3: a Thumb-V copy of VexRiscv's fetcher (`Fetcher.scala` + `IBusSimplePlugin.scala`) in `rtl/core`, with changes marked; the region CSRs, NZCV unit and interrupt gating as separate plugins through VexRiscv's services. A separate plugin can't reach the fetcher's internals ([vexriscv-notes.md](vexriscv-notes.md#decisions)) |
 | D6 | SoC wrapper | Proposed: a minimal hand-written SoC around the core. LiteX for a first board smoke test only. |
-| D7 | Mode selection | **Decided:** programmable Thumb address regions (section 2). Number of regions and the CSR layout still open. |
+| D7 | Mode selection | **Decided:** programmable Thumb address regions (section 2). 2 regions, as base/limit CSRs `0x7C0`–`0x7C3`, word-aligned, followed by `fence.i` ([core.md](core.md#thumb-v-changes)) |
 | D8 | Interworking build flow | **Decided:** link the Thumb side first; Thumb calls into RISC-V go through a jump table at a fixed address; RISC-V thunks are generated from an interface header only where the ABIs differ ([interworking.md](interworking.md)) |
 | D9 | Interrupt controller | **Decided:** one controller with the ARMv6-M NVIC programming model, shared by both instruction sets, with a shared RISC-V entry routine that calls handlers of either instruction set as ordinary functions (section 6). Hardware vectoring later. |
 
@@ -248,7 +248,12 @@ Goal: an unmodified RISC-V core running in Verilator and on the CYC1000, and a p
 
 Goal: a RISC-V program calls its first Thumb function in hardware.
 
-1. Thumb region CSRs and address-range mode select in the fetch stage, plus the Thumb length rule in the aligner.
+1. Thumb region CSRs and address-range mode select in the fetch stage, plus the Thumb length rule in the aligner. (done)
+   - VexRiscv's fetcher is copied into `rtl/core` (D5); the copy alone generates the stock core's Verilog. The Thumb changes are marked `THUMBV` ([core.md](core.md#thumb-v-changes)).
+   - 2 region CSRs at `0x7C0`–`0x7C3`, in the RTL and the model.
+   - A stub expander (`NOP`, `BX LR`, barriers) is enough for a RISC-V program to call Thumb code and return. That test covers 16- and 32-bit instructions at both alignments, a 32-bit instruction straddling two words, and entry at a halfword. It runs in lockstep with the model.
+   - Unexpanded Thumb instructions trap at their own address.
+   - Cost: 385 LEs.
 2. Combinational expander for the 1:1 subset: loads and stores with immediate offset, hi-register `MOV`/`ADD`, SP-relative ops, `B`, `BX`, `BL`/`BLX`. Flag-setting instructions compute their result only; flags come in Phase 4.
 3. **Exhaustive equivalence test.** Drive all 65,536 halfwords (plus the 32-bit encodings), at both PC alignments, through the RTL expander and compare against `model/expander.py`.
 4. Integration test: a RISC-V `main` calls a Thumb function compiled by `arm-none-eabi-gcc` that uses only this subset (e.g. a memory copy or table lookup without conditional branches). The Thumb function calls back into a RISC-V function, and the result is printed over UART. Runs in Verilator against the model, then on the board.
@@ -303,7 +308,6 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)).
+Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2: 2.1 (mode switch in fetch).
 
-1. Close Phase 1: merge `phase-1` to `main`.
-2. Phase 2.1: copy VexRiscv's fetcher into `rtl/core` (D5), add the Thumb region CSRs, mode select and the Thumb length rule.
+1. Phase 2.2: the expander in RTL for the 1:1 instructions, replacing the 2.1 stub.

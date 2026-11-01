@@ -5,11 +5,12 @@ without them unless THUMBV_REQUIRE_RTL=1.
 """
 
 import dataclasses
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from thumbv import elf, lockstep, rtlsim
+from thumbv import build, elf, lockstep, rtlsim
 
 
 def run(images, tmp_path, **kwargs):
@@ -56,6 +57,31 @@ def test_wave(rtl_simulator, build_c, tmp_path):
     wave = tmp_path / "hello.fst"
     run([image], tmp_path, wave=wave)
     assert wave.stat().st_size > 1000
+
+
+def build_rv_asm(name, tmp_path):
+    """An RV32 program from tests/asm/ with its own _start, linked like the C programs."""
+    source = Path(__file__).parent / "asm" / name
+    return elf.load(build.compile_and_link("rv32", [source], tmp_path / (source.stem + ".elf"),
+                                           [*build.C_FLAGS["rv32"], build._linker_script("rv32.ld")]))
+
+
+def test_thumb_mode_switch(rtl_simulator, tmp_path):
+    """Phase 2.1: a call into a Thumb region and back. The region comes from the
+    program's own CSR writes, in the RTL and in the model."""
+    image = build_rv_asm("rtl_thumb_mode.S", tmp_path)
+    result = run([image], tmp_path)
+    assert result.a0 == 2
+    thumb = [r.pc for r in result.trace if r.pc >= image.symbols["thumb_start"] and r.pc < image.symbols["thumb_end"]]
+    start = image.symbols["thumb_start"]
+    assert [pc - start for pc in thumb] == [0, 2, 6, 8, 12, 16, 18, 20, 18, 20]
+    assert rtlsim.lockstep([image], result) is None
+
+
+def test_thumb_illegal_traps_at_its_address(rtl_simulator, tmp_path):
+    image = build_rv_asm("rtl_thumb_illegal.S", tmp_path)
+    result = run([image], tmp_path)
+    assert result.a0 == image.symbols["thumb_movs"]
 
 
 def test_board_memories(rtl_simulator, build_c, tmp_path):

@@ -5,6 +5,7 @@ FPGA resource use and timing of the board design ([board.md](board.md)), one row
 | Milestone | Date | LEs | Registers | M9K | Multipliers (9-bit) | Fmax | Notes |
 |---|---|---|---|---|---|---|---|
 | 1.4 stock core | 2026-10-31 | 2,966 (12%) | 1,224 | 50 (76%) | 8 | 50.5 MHz | RV32IMC VexRiscv ([core.md](core.md)), 32 KiB code + 16 KiB data RAM, UART, LEDs; no PLL, runs at 12 MHz |
+| 2.1 mode switch | 2026-11-01 | 3,351 (14%) | 1,364 | 50 (76%) | 8 | 48.8 MHz | + 2 Thumb regions (four 30-bit CSRs and comparators in fetch), the Thumb length rule, the stub expander |
 
 ## 1.4 baseline
 

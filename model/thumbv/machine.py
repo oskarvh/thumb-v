@@ -76,14 +76,18 @@ class Machine:
         self.pc = 0
         self.mstatus = 0
         self.mem = Memory()
-        self.thumb_regions = list(thumb_regions)  # [(base, limit)), like the region CSRs
+        self.thumb_regions = list(thumb_regions)  # [(base, limit)): fixed regions, set by the loader
+        self.region_csrs = [0] * (2 * r.THUMB_REGIONS)   # the hardware's region CSRs, see rv32.py
         self.options = options
         self.retired_thumb = 0   # Thumb instructions completed
         self.retired_ops = 0     # RV32 ops executed, native or expanded
         self._expansions = {}    # (pc, hw1, hw2) -> Expansion; expand() is a pure function
 
     def in_thumb(self, addr: int) -> bool:
-        return any(base <= addr < limit for base, limit in self.thumb_regions)
+        if any(base <= addr < limit for base, limit in self.thumb_regions):
+            return True
+        c = self.region_csrs
+        return any(c[2 * i] <= addr < c[2 * i + 1] for i in range(r.THUMB_REGIONS))
 
     def step(self):
         """Execute one instruction: one Thumb instruction (all its ops) or one RV32 op."""
@@ -233,8 +237,9 @@ class Machine:
         if w == r.wfi():
             return None
         csr = w >> 20
-        if f3 in (1, 2, 3, 5, 6, 7) and csr == r.MSTATUS:
-            old = self.mstatus
+        regions = range(r.THUMB_REGION0, r.THUMB_REGION0 + 2 * r.THUMB_REGIONS)
+        if f3 in (1, 2, 3, 5, 6, 7) and (csr == r.MSTATUS or csr in regions):
+            old = self.mstatus if csr == r.MSTATUS else self.region_csrs[csr - r.THUMB_REGION0]
             src = rs1 if f3 >= 5 else self.x[rs1]   # immediate forms use the field itself
             if f3 & 3 == 1:
                 new = src
@@ -244,7 +249,10 @@ class Machine:
                 new = old & ~src
             # Writes are skipped when rs1/uimm is 0 for the set/clear forms.
             if f3 & 3 == 1 or rs1:
-                self.mstatus = new & MASK
+                if csr == r.MSTATUS:
+                    self.mstatus = new & MASK
+                else:
+                    self.region_csrs[csr - r.THUMB_REGION0] = new & MASK & ~3
             self._set(rd, old)
             return None
         raise Trap("illegal_instruction", pc, w)

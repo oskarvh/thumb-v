@@ -19,7 +19,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import elf
+from . import elf, expander
 from .build import REPO, ToolMissing
 from .expander import Options
 from .lockstep import Divergence, Layout, _load_model, describe
@@ -164,9 +164,14 @@ def lockstep(images, result: Result) -> Divergence | None:
         if m.pc != r.pc:
             problems.append(f"pc: model {m.pc:#010x}, RTL {r.pc:#010x}")
         else:
-            insn = m.mem.read(m.pc, 4)
-            if insn != r.insn:
-                problems.append(f"instruction: model {insn:#010x}, RTL {r.insn:#010x}")
+            # The RVFI word holds the instruction as fetched: for a 16-bit
+            # Thumb instruction, only its low half is the instruction.
+            n = 4
+            if m.in_thumb(m.pc) and not expander.isa.is_32bit(m.mem.read(m.pc, 2)):
+                n = 2
+            insn = m.mem.read(m.pc, n)
+            if insn != r.insn & ((1 << 8 * n) - 1):
+                problems.append(f"instruction: model {insn:#0{2 + 2 * n}x}, RTL {r.insn:#010x}")
         if problems:
             return Divergence(step, r.pc, describe(m, layout, r.pc), problems)
         if r.rmask and IO_BASE <= r.mem_addr < IO_BASE + IO_SIZE:
