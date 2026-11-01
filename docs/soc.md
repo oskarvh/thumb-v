@@ -19,7 +19,7 @@ Access faults:
 - A load from an unmapped address faults.
 - A store to an unmapped address is dropped.
 
-The 256 KiB code RAM fits in simulation only: the 10CL025 has about 66 KB of block RAM in all. The board build in Phase 1.4 will use smaller RAMs, with its own link scripts.
+The 256 KiB code RAM fits in simulation only: the 10CL025 has about 66 KB of block RAM in all. The board uses a 32 KiB code RAM and a 16 KiB data RAM. A RAM smaller than its region repeats (aliases) through it, so the same ELF files run on the board as long as their parts don't land on the same RAM byte ([board.md](board.md)).
 
 `tests/c/soc.h` defines the registers for C programs (`soc_putc`, `soc_puts`, `LEDS`).
 

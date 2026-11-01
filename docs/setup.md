@@ -30,6 +30,7 @@ Tests skip when a cross toolchain is missing. Set `THUMBV_REQUIRE_TOOLS=1` to ma
 | `make measure` | Cost the flags strategies over all benchmarks and print the table in [flags-decision.md](flags-decision.md) (about 20 s) |
 | `make core` | Generate the VexRiscv core into `build/rtl/` and lint it (Phase 1, needs sbt and Verilator) |
 | `make test-rtl` | Run programs on the SoC in Verilator, in lockstep with the model ([soc.md](soc.md)); fails instead of skipping if a tool is missing |
+| `make board` | Run hello world, or `ELF=program.elf`, on the CYC1000 and print its UART output ([board.md](board.md)); needs Quartus and openFPGALoader |
 | `make clean` | Remove `build/` and Python caches |
 
 ### Running tests selectively
@@ -157,6 +158,9 @@ gtkwave build/sim/hello.fst
 
 See [soc.md](soc.md) for the memory map, the testbench, the waveforms and the lockstep.
 
-Later:
-- **Quartus Prime Lite** for the Cyclone 10 LP, from Intel's website.
-- **openFPGALoader** (`sudo apt-get install openfpgaloader`) to program the CYC1000.
+### The board
+
+`make board` ([board.md](board.md)) needs:
+- **Quartus Prime Lite** with Cyclone 10 LP support. Download it from Altera's download centre (Quartus Prime Lite Edition, Linux, "Individual Files"): the `QuartusLiteSetup-<version>-linux.run` installer and the `cyclone10lp-<version>.qdz` device file, in the same directory. Run the installer; no `sudo` is needed. Quartus doesn't need to be on `PATH`: `thumbv.board` and `make check-tools` also look in `~/altera_lite/*` and `~/intelFPGA_lite/*`.
+- **openFPGALoader**: `sudo apt-get install openfpgaloader`. Its udev rule gives the `plugdev` group access to the board, so be in `plugdev`, and unplug and replug the board after installing.
+- For the UART, be in the `dialout` group (or `plugdev`, through the same udev rule).

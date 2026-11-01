@@ -234,7 +234,13 @@ Goal: an unmodified RISC-V core running in Verilator and on the CYC1000, and a p
   - **CSRs:** added through `CsrInterface`.
   - **Vectoring:** up to 16 hardware-vectored interrupts with stock plugins.
 
-**1.4 Board bring-up.** Quartus Prime Lite project for the 10CL025, programmed with `openFPGALoader` (which supports the CYC1000's on-board Arrow USB Blaster). LED blinky plus UART hello from the same binary as in simulation. Record a resource and Fmax baseline (LEs, M9Ks, MHz) in `docs/resources.md`.
+**1.4 Board bring-up.** (done) Quartus Prime Lite project for the 10CL025, programmed with `openFPGALoader` (which supports the CYC1000's on-board Arrow USB Blaster). LED blinky plus UART hello from the same binary as in simulation. Record a resource and Fmax baseline (LEs, M9Ks, MHz) in `docs/resources.md`.
+- `rtl/board/` and `make board` ([board.md](board.md)): hello world and a blinky run on the CYC1000 at 12 MHz, from the same ELF files as in simulation. The board's RAMs (32 KiB code, 16 KiB data) alias through the simulation's memory regions, and `rtlsim --board` simulates that configuration.
+- Baseline ([resources.md](resources.md)): 2,966 LEs (12%), 50 of 66 M9K, 8 multipliers, Fmax 50.5 MHz.
+- **Lessons:**
+  - openFPGALoader must load the SVF, not the RBF.
+  - Its exit status can't be trusted.
+  - The FT2232H needs a moment between loads.
 
 **Exit criteria:** the same RISC-V binary runs in Verilator and on the board; the patch points are documented; LE/Fmax baseline recorded.
 
@@ -297,6 +303,7 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-Phase 0 is closed. Done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)).
+Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)).
 
-1. Phase 1.4: board bring-up on the CYC1000 and the resource and Fmax baseline.
+1. Close Phase 1: merge `phase-1` to `main`.
+2. Phase 2.1: copy VexRiscv's fetcher into `rtl/core` (D5), add the Thumb region CSRs, mode select and the Thumb length rule.

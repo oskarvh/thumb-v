@@ -26,8 +26,14 @@ check later   sbt                     "SpinalHDL / VexRiscv"
 check later   verilator               "linting and RTL simulation"
 check optional gtkwave                "viewing waveforms (or Surfer)"
 
-echo "Board (optional for now):"
+echo "Board (make board):"
 check later   openFPGALoader          "programming the CYC1000"
-check later   quartus_sh              "Quartus Prime Lite synthesis"
+# Quartus is usually not on PATH: also look in the default install directories.
+quartus=$(command -v quartus_sh || ls -d "$HOME"/altera_lite/*/quartus/bin/quartus_sh "$HOME"/intelFPGA_lite/*/quartus/bin/quartus_sh 2>/dev/null | tail -1)
+if [ -n "$quartus" ]; then
+    printf '  ok        %-26s %s\n' quartus_sh "$quartus"
+else
+    printf '  %-9s %-26s %s\n' later quartus_sh "(Quartus Prime Lite synthesis)"
+fi
 
 exit $missing

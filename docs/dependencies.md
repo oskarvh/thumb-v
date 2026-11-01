@@ -17,8 +17,8 @@ Everything Thumb-V depends on, including what later phases will need. Install in
 | GTKWave or Surfer (optional) | viewing waveforms from `rtlsim --wave` | Phase 1 | — | `gtkwave`; Surfer from [surfer-project.org](https://surfer-project.org/) | GPL-2.0; EUPL-1.2 |
 | Java (JDK) | SpinalHDL / VexRiscv generation | Phase 1 | OpenJDK 21 | `openjdk-21-jdk` | GPL-2.0 with classpath exception |
 | sbt | SpinalHDL / VexRiscv build. `rtl/core` pins sbt 1.10.7 (downloaded by the launcher) and Scala 2.12.18, VexRiscv's | Phase 1 | launcher 2.0.12 | sbt's apt repository, see setup.md | Apache-2.0 |
-| Quartus Prime Lite | synthesis for the Cyclone 10 LP | Phase 1.4 | — | Intel download | proprietary, free |
-| openFPGALoader | programming the CYC1000 | Phase 1.4 | — | `openfpgaloader` | Apache-2.0 |
+| Quartus Prime Lite | synthesis for the Cyclone 10 LP | Phase 1.4 | 25.1std.0 build 1129 | Altera download centre, see setup.md | proprietary, free |
+| openFPGALoader | programming the CYC1000 | Phase 1.4 | 0.12.0 | `openfpgaloader` | Apache-2.0 |
 
 ## Python packages
 

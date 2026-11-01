@@ -1,19 +1,24 @@
 // Thumb-V SoC: the core, on-chip RAM, a UART transmitter and LEDs.
 //
 // Memory map (matches the software model's layout, see model/thumbv/build.py):
-//   0x0000_0000  code RAM, CODE_WORDS words: instructions and read-only data,
-//                also readable and writable as data (Thumb literal pools)
+//   0x0000_0000  code region, 256 KiB: the code RAM, CODE_WORDS words, for
+//                instructions and read-only data, also readable and writable
+//                as data (Thumb literal pools)
 //   0x1000_0000  UART data   (write: send a byte)
 //   0x1000_0004  UART status (bit 0: busy)
 //   0x1000_0008  LEDs        (bits 7:0, read/write)
-//   0x2000_0000  data RAM, DATA_WORDS words
+//   0x2000_0000  data region, 64 KiB: the data RAM, DATA_WORDS words
+// A RAM smaller than its region repeats (aliases) through it, so the board's
+// small RAMs run the same programs as long as their parts don't collide.
 // Anything else gives an access fault: instruction fetches outside the code
-// RAM, and loads from unmapped addresses (stores there are dropped).
+// region, and loads from unmapped addresses (stores there are dropped).
 
 module thumbv_soc #(
     parameter CODE_WORDS        = 65536,  // 256 KiB
     parameter DATA_WORDS        = 16384,  // 64 KiB
-    parameter UART_CLKS_PER_BIT = 104     // 12 MHz / 115200 baud
+    parameter UART_CLKS_PER_BIT = 104,    // 12 MHz / 115200 baud
+    parameter CODE_INIT         = "",     // $readmemh images, see thumbv_ram
+    parameter DATA_INIT         = ""
 ) (
     input  wire       clk,
     input  wire       reset,              // synchronous, active high
@@ -75,11 +80,11 @@ module thumbv_soc #(
     // --- Address decode ---------------------------------------------------------
 
     function automatic in_code(input [31:0] a);
-        in_code = a < CODE_WORDS * 4;
+        in_code = a[31:18] == 14'd0;                  // 0x0000_0000, 256 KiB
     endfunction
 
     function automatic in_data(input [31:0] a);
-        in_data = a >= 32'h2000_0000 && a < 32'h2000_0000 + DATA_WORDS * 4;
+        in_data = a[31:16] == 16'h2000;               // 0x2000_0000, 64 KiB
     endfunction
 
     function automatic in_io(input [31:0] a);
@@ -95,7 +100,7 @@ module thumbv_soc #(
 
     wire [31:0] code_rdata;
 
-    thumbv_ram #(.WORDS(CODE_WORDS)) code_ram (
+    thumbv_ram #(.WORDS(CODE_WORDS), .INIT_FILE(CODE_INIT)) code_ram (
         .clk     (clk),
         .a_addr  (ibus_cmd_pc[CODE_BITS+1:2]),
         .a_rdata (ibus_rsp_inst),
@@ -114,7 +119,7 @@ module thumbv_soc #(
 
     wire [31:0] data_rdata;
 
-    thumbv_ram #(.WORDS(DATA_WORDS)) data_ram (
+    thumbv_ram #(.WORDS(DATA_WORDS), .INIT_FILE(DATA_INIT)) data_ram (
         .clk     (clk),
         .a_addr  ({DATA_BITS{1'b0}}),
         .a_rdata (),

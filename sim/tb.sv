@@ -1,4 +1,6 @@
 // Simulation testbench for the Thumb-V SoC (Verilator --binary --timing).
+// CODE_WORDS and DATA_WORDS set the RAM sizes (-G): the defaults fill the
+// regions, smaller ones simulate the board's RAMs.
 //
 // Plusargs:
 //   +code=<file>    $readmemh image for the code RAM (word addresses)
@@ -17,7 +19,10 @@
 
 `timescale 1ns / 1ps
 
-module tb;
+module tb #(
+    parameter CODE_WORDS = 65536,
+    parameter DATA_WORDS = 16384
+);
     localparam CLKS_PER_BIT = 4;   // fast UART for simulation
 
     logic clk = 0;
@@ -27,7 +32,8 @@ module tb;
 
     always #5 clk = ~clk;
 
-    thumbv_soc #(.UART_CLKS_PER_BIT(CLKS_PER_BIT)) dut (
+    thumbv_soc #(.CODE_WORDS(CODE_WORDS), .DATA_WORDS(DATA_WORDS),
+                 .UART_CLKS_PER_BIT(CLKS_PER_BIT)) dut (
         .clk(clk), .reset(reset), .uart_tx(uart_tx), .leds(leds));
 
     string code_file, data_file, trace_file, wave_file;

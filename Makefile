@@ -1,4 +1,4 @@
-.PHONY: help setup check-tools test test-slow measure core test-rtl clean
+.PHONY: help setup check-tools test test-slow measure core test-rtl board clean
 
 help:
 	@echo "make setup        create the Python environment (uv)"
@@ -8,6 +8,7 @@ help:
 	@echo "make measure      cost the flags strategies over all benchmarks (Phase 0.7)"
 	@echo "make core         generate the VexRiscv core into build/rtl/ and lint it (Phase 1.1)"
 	@echo "make test-rtl     run programs on the SoC in Verilator, in lockstep with the model (Phase 1.2)"
+	@echo "make board        run hello world (or ELF=program.elf) on the CYC1000 (Phase 1.4)"
 	@echo "make clean        remove build outputs and caches"
 
 setup:
@@ -33,6 +34,9 @@ core:
 
 test-rtl: core
 	THUMBV_REQUIRE_RTL=1 uv run pytest tests/test_rtl.py
+
+board: core
+	uv run python -m thumbv.board $(ELF)
 
 clean:
 	rm -rf build .pytest_cache
