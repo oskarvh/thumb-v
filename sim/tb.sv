@@ -78,12 +78,13 @@ module tb #(
             if (dut.cpu.rvfi_rd_addr == 10)
                 a0 <= dut.cpu.rvfi_rd_wdata;
             if (trace_fd != 0)
-                $fdisplay(trace_fd, "%h %h %h %h %h %h %h %h %h %h",
+                $fdisplay(trace_fd, "%h %h %h %h %h %h %h %h %h %h %h",
                           dut.cpu.rvfi_pc_rdata, dut.cpu.rvfi_insn,
                           dut.cpu.rvfi_rd_addr, dut.cpu.rvfi_rd_wdata,
                           dut.cpu.rvfi_mem_addr, dut.cpu.rvfi_mem_rmask,
                           dut.cpu.rvfi_mem_wmask, dut.cpu.rvfi_mem_rdata,
-                          dut.cpu.rvfi_mem_wdata, dut.cpu.rvfi_trap);
+                          dut.cpu.rvfi_mem_wdata, dut.cpu.rvfi_trap,
+                          dut.cpu.thumbNzcv);         // NZCV after the op (ThumbFlagsPlugin)
             if (dut.cpu.rvfi_insn == 32'h0000006f)
                 done <= 1;
         end

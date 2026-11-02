@@ -162,6 +162,26 @@ def test_thumb_shifts_reversals_primask(rtl_simulator, build_mixed, tmp_path):
                      "MSR", "MRS", "CPSID", "CPSIE"}
 
 
+FLAG_WRITERS = {"ADDS_reg", "SUBS_reg", "ADDS_imm3", "SUBS_imm3", "ADDS_imm8", "SUBS_imm8",
+                "CMP_imm", "CMP_reg", "CMN", "RSBS", "TST", "ANDS", "EORS", "ORRS", "BICS",
+                "MVNS", "MOVS_imm", "MOVS_reg", "MULS", "LSLS_imm", "LSRS_imm", "ASRS_imm",
+                "LSLS_reg", "LSRS_reg", "ASRS_reg", "RORS", "CMP_hi"}
+
+
+def test_thumb_flag_writers(rtl_simulator, build_mixed, tmp_path):
+    """Phase 4.2: every instruction that writes the flags, on edge-case
+    operands, in lockstep with the model; NZCV is compared after every op."""
+    rv_elf, thumb_elf = build_mixed(["rtl_thumb_flags.S"], ["rtl_thumb_flags_main.c"])
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    names = {name for (pc, name), n in thumb_instructions_run(images, result).items()}
+    assert names >= FLAG_WRITERS
+    # The flags take every value they can here: N and Z exclusive, C and V free.
+    assert len({r.nzcv for r in result.trace}) >= 10
+
+
 @pytest.mark.parametrize("seed", [1, 2, 3])
 def test_interrupts_land_between_thumb_instructions(rtl_simulator, build_mixed, tmp_path, seed):
     """Phase 3.4 (D3): with the timer interrupt raised every few cycles, Thumb

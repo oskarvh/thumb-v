@@ -92,7 +92,8 @@ def expander_simulator() -> Path:
 
 
 def expand_rtl(queries, out_dir: Path) -> list[tuple[int, bool]]:
-    """The RTL expander's (op, last) for each (hw1, hw2, pc1, step)."""
+    """The RTL expander's (op, last) for each (hw1, hw2, pc1, step); op has the
+    flags side-band in bits 39:32, as the model's ops."""
     sim = expander_simulator()
     inputs, outputs = out_dir / "expander_in.txt", out_dir / "expander_out.txt"
     inputs.write_text("".join(f"{hw1:04x} {hw2:04x} {pc1:x} {step:x}\n" for hw1, hw2, pc1, step in queries))
@@ -150,6 +151,7 @@ class Retired:
     rdata: int
     wdata: int
     trap: int
+    nzcv: int        # the flags unit's NZCV after the op
 
     @classmethod
     def parse(cls, line: str):
@@ -192,7 +194,7 @@ def run(images, out_dir: Path, max_cycles: int = 10_000_000, trace: bool = True,
 
 
 # The hardware's expander mode until its flags unit (Phase 4): results only.
-HARDWARE = Options(flags="none")
+HARDWARE = Options(flags="C", flag_readers=False)
 
 
 def lockstep(images, result: Result, options: Options = HARDWARE) -> Divergence | None:
@@ -245,6 +247,8 @@ def lockstep(images, result: Result, options: Options = HARDWARE) -> Divergence 
                 problems.append(f"x{r.rd}: model {m.x[r.rd]:#010x}, RTL {r.rd_wdata:#010x}")
             if changed - {r.rd}:
                 problems.append(f"model also wrote {sorted(changed - {r.rd})}")
+            if options.flags == "C" and m.nzcv != r.nzcv:
+                problems.append(f"NZCV: model {m.nzcv:04b}, RTL {r.nzcv:04b}")
             model_stores = {a + j: (v >> 8 * j) & 0xFF for a, k, v in m.mem.log for j in range(k)}
             rtl_stores = {r.mem_addr + j: (r.wdata >> 8 * j) & 0xFF for j in range(4) if r.wmask >> j & 1}
             if model_stores != rtl_stores:

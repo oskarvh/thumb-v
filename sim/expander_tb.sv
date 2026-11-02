@@ -5,13 +5,14 @@
 //   +in=<file>    one per line: "hw1 hw2 pc1 step" in hex: the instruction
 //                 (hw2 is ignored for 16-bit ones), bit 1 of its address and
 //                 the op number in its expansion
-//   +out=<file>   "op last" for each: the RV32 op, and 1 if it is the last
+//   +out=<file>   "op last" for each: the op (flags side-band ## RV32 word,
+//                 40 bits) and 1 if it is the last
 
 module expander_tb;
     logic [15:0] hw1, hw2;
     logic        pc1;
     logic [3:0]  step;
-    wire  [31:0] op;
+    wire  [39:0] op;
     wire         last;
 
     ThumbExpander dut (.io_hw1(hw1), .io_hw2(hw2), .io_pc1(pc1), .io_step(step), .io_op(op), .io_last(last));

@@ -39,6 +39,9 @@ from .regmap import FC, FN, FV, FZ, LR, PC, SP, T1, T2, T3, T4, T5, T6, rv
 class Options:
     exact_lr: bool = False  # set bit 0 of LR on BL/BLX, as a real Cortex-M does
     flags: str = "A"        # "A": strategy A; "none": results only; "C": flags unit (see above)
+    # Under C: False keeps the instructions that read the flags (ADCS, SBCS,
+    # B<cond>, MRS/MSR APSR) illegal, as the hardware did in Phase 4.2.
+    flag_readers: bool = True
 
     def __post_init__(self):
         if self.flags not in ("A", "none", "C"):
@@ -164,8 +167,9 @@ def _result(o, result, flag_ops):
 
 
 def _reads_flags(o):
-    """Without flags, instructions that read them are illegal."""
-    return o.flags == "none"
+    """Without flags (or without the readers, under C), instructions that read
+    them are illegal."""
+    return o.flags == "none" or (o.flags == "C" and not o.flag_readers)
 
 
 def _c(o):

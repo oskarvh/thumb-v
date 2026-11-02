@@ -63,7 +63,7 @@ object Core {
       zeroBoot = false
     ),
     new IntAluPlugin,
-    new SrcPlugin(
+    new ThumbSrcPlugin(                 // SrcPlugin with the flags unit's carry-in (Phase 4)
       separatedAddSub = false,
       executeInsertion = true
     ),
@@ -85,6 +85,7 @@ object Core {
       fenceiGenAsAJump = true           // no instruction cache: fence.i (ISB) just refetches
     ),
     new ThumbRegionPlugin,             // Thumb region CSRs 0x7C0-0x7C3 (D7)
+    new ThumbFlagsPlugin,              // the NZCV unit, CSR 0x7C4 (D1)
     new FormalPlugin
   )
 

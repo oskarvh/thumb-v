@@ -63,6 +63,7 @@ object Rv {
   def sll(rd: UInt, rs1: UInt, rs2: UInt) = r(0x00, 1, rd, rs1, rs2)
   def srl(rd: UInt, rs1: UInt, rs2: UInt) = r(0x00, 5, rd, rs1, rs2)
   def sra(rd: UInt, rs1: UInt, rs2: UInt) = r(0x20, 5, rd, rs1, rs2)
+  def sltu(rd: UInt, rs1: UInt, rs2: UInt) = r(0x00, 3, rd, rs1, rs2)
   def sltiu(rd: UInt, rs1: UInt, imm: Bits) = i(3, rd, rs1, imm)
   def lui(rd: UInt, imm20: Bits) = u(rd, imm20, 0x37)
   def csrrs(rd: UInt, csr: Int, rs1: UInt) = i(2, rd, rs1, B(csr, 12 bits), 0x73)
@@ -86,11 +87,29 @@ object Rv {
   /** A 12-bit immediate: an unsigned value, or its negation. */
   def imm(v: UInt): Bits = v.resize(12).asBits
   def negImm(v: UInt): Bits = (U(0, 12 bits) - v.resize(12)).asBits
+
+  /** `op` with a flags kind (and, for BRANCH, an ARM condition) beside it:
+    * 40 bits, side-band ## op, as model/thumbv/rv32.py's `flagged`. */
+  def flagged(op: Bits, kind: Int, cond: Bits = B(0, 4 bits)): Bits = cond ## B(kind, 4 bits) ## op
+}
+
+/** The flags kinds of strategy C (model/thumbv/rv32.py, docs/plan.md Phase 4). */
+object Flags {
+  val NZ = 1        // N, Z from the result
+  val ADD = 2       // rd = rs1 + src2, NZCV from the adder
+  val SUB = 3       // rd = rs1 - src2 (also on addi), C = NOT borrow
+  val ADC = 4       // rd = rs1 + src2 + C
+  val SBC = 5       // rd = rs1 - src2 - NOT C
+  val SHL = 6       // N, Z from the result, C = rs1[-shamt mod 32]
+  val SHR = 7       // N, Z from the result, C = rs1[(shamt - 1) mod 32]
+  val CW = 8        // C = result[0] if result[1] is set
+  val BRANCH = 9    // on beq x0, x0: taken only if the condition holds
 }
 
 /** The Thumb instruction set, in hardware: the length rule and the expander. */
 object Thumb {
   import Rv._
+  import Flags._
 
   /** The first halfword of a 32-bit Thumb instruction: bits 15:11 are 11101,
     * 11110 or 11111 (BL, MRS, MSR and the barriers on ARMv6-M). */
@@ -107,6 +126,7 @@ object Thumb {
   /** One op of a Thumb instruction's expansion. */
   case class ThumbOp() extends Bundle {
     val op = Bits(32 bits)
+    val side = Bits(8 bits) // the flags side-band: condition (7:4), kind (3:0)
     val last = Bool()       // the expansion's last op: the PC moves on after it
   }
 
@@ -116,16 +136,21 @@ object Thumb {
     * from `step` by the caller. `step` picks the op to emit. */
   private class Ops(step: UInt) {
     val result = ThumbOp()
-    result.op := ILLEGAL
+    // An op is a 32-bit RV32 word, or 40 bits with the flags side-band (flagged).
+    private val wide = Bits(40 bits)
+    wide := B(0, 8 bits) ## ILLEGAL
+    result.op := wide(31 downto 0)
+    result.side := wide(39 downto 32)
     result.last := True
+    private def w(op: Bits): Bits = if (op.getWidth == 40) op else B(0, 8 bits) ## op
     def :=(op: Bits): Unit = seq(op)
     def seq(ops: Bits*): Unit = {
-      result.op := ops.head
-      for (i <- 1 until ops.size) when(step === i) { result.op := ops(i) }
+      wide := w(ops.head)
+      for (i <- 1 until ops.size) when(step === i) { wide := w(ops(i)) }
       result.last := step === ops.size - 1
     }
     def at(op: Bits, last: Bool): Unit = {
-      result.op := op
+      wide := w(op)
       result.last := last
     }
   }
@@ -157,11 +182,12 @@ object Thumb {
   /** Op `step` of a Thumb instruction's expansion (hw2 only matters for
     * 32-bit instructions; pc1 is bit 1 of the instruction's address).
     *
-    * The model, model/thumbv/expander.py with Options(flags = "none"), is the
-    * reference, op for op and bit for bit, for every instruction (since
-    * Phase 3.3). Instructions that read the flags (ADCS, SBCS, B<cond>, the
-    * APSR) are the all-zero illegal instruction until the flags unit, as in
-    * the model. tests/test_expander_rtl.py checks this for every 16-bit
+    * The model, model/thumbv/expander.py with Options(flags = "C",
+    * flag_readers = False) (rtlsim.HARDWARE), is the reference, op for op and
+    * bit for bit, side-band included, for every instruction. Flag-setting
+    * instructions are strategy C (Phase 4.2). Instructions that read the
+    * flags (ADCS, SBCS, B<cond>, the APSR) are still the all-zero illegal
+    * instruction, as in that mode. tests/test_expander_rtl.py checks this for every 16-bit
     * instruction at both alignments, and a large sweep of 32-bit ones.
     */
   def expand(hw1: Bits, hw2: Bits, pc1: Bool, step: UInt): ThumbOp = {
@@ -188,61 +214,83 @@ object Thumb {
 
     switch(hw(15 downto 11)) {
       // --- Shift (immediate), add, subtract, move, compare ---------------------
-      is(B"00000") {        // LSLS rd, rm, #imm5 (imm5 = 0: MOVS rd, rm)
-        out := (imm5 === 0) ? addi(r20, r53, imm(U(0))) | slli(r20, r53, imm5)
+      is(B"00000") {        // LSLS rd, rm, #imm5 (imm5 = 0: MOVS rd, rm, C unchanged)
+        out := (imm5 === 0) ? flagged(addi(r20, r53, imm(U(0))), NZ) | flagged(slli(r20, r53, imm5), SHL)
       }
-      is(B"00001") {        // LSRS rd, rm, #imm5 (imm5 = 0 shifts by 32: rd = 0)
-        out := (imm5 === 0) ? addi(r20, X0, imm(U(0))) | srli(r20, r53, imm5)
+      // LSRS, ASRS by imm5; imm5 = 0 shifts by 32: C = rm[31] (SHR with shamt 0
+      // reads bit (0 - 1) mod 32), then the result (0, or as by 31) with N, Z.
+      is(B"00001") {        // LSRS rd, rm, #imm5
+        when(imm5 === 0) { out.seq(flagged(srli(T1, r53, U(0)), SHR), flagged(addi(r20, X0, imm(U(0))), NZ)) }
+          .otherwise { out := flagged(srli(r20, r53, imm5), SHR) }
       }
-      is(B"00010") {        // ASRS rd, rm, #imm5 (imm5 = 0 shifts by 32: as by 31)
-        out := srai(r20, r53, (imm5 === 0) ? U(31, 5 bits) | imm5)
+      is(B"00010") {        // ASRS rd, rm, #imm5
+        when(imm5 === 0) { out.seq(flagged(srli(T1, r53, U(0)), SHR), flagged(srai(r20, r53, U(31)), NZ)) }
+          .otherwise { out := flagged(srai(r20, r53, imm5), SHR) }
       }
       is(B"00011") {
         switch(hw(10 downto 9)) {
-          is(B"00") { out := add(r20, r53, r86) }              // ADDS rd, rn, rm
-          is(B"01") { out := sub(r20, r53, r86) }              // SUBS rd, rn, rm
-          is(B"10") { out := addi(r20, r53, imm(imm3)) }       // ADDS rd, rn, #imm3
-          is(B"11") { out := addi(r20, r53, negImm(imm3)) }    // SUBS rd, rn, #imm3
+          is(B"00") { out := flagged(add(r20, r53, r86), ADD) }          // ADDS rd, rn, rm
+          is(B"01") { out := flagged(sub(r20, r53, r86), SUB) }          // SUBS rd, rn, rm
+          is(B"10") { out := flagged(addi(r20, r53, imm(imm3)), ADD) }   // ADDS rd, rn, #imm3
+          is(B"11") { out := flagged(addi(r20, r53, imm(imm3)), SUB) }   // SUBS: SUB makes addi subtract
         }
       }
-      is(B"00100") { out := addi(r108, X0, imm(imm8)) }        // MOVS rd, #imm8
-      is(B"00101") { out := NOP }                              // CMP rn, #imm8
-      is(B"00110") { out := addi(r108, r108, imm(imm8)) }      // ADDS rdn, #imm8
-      is(B"00111") { out := addi(r108, r108, negImm(imm8)) }   // SUBS rdn, #imm8
+      is(B"00100") { out := flagged(addi(r108, X0, imm(imm8)), NZ) }     // MOVS rd, #imm8
+      is(B"00101") { out := flagged(addi(X0, r108, imm(imm8)), SUB) }    // CMP rn, #imm8
+      is(B"00110") { out := flagged(addi(r108, r108, imm(imm8)), ADD) }  // ADDS rdn, #imm8
+      is(B"00111") { out := flagged(addi(r108, r108, imm(imm8)), SUB) }  // SUBS rdn, #imm8
 
       is(B"01000") {
         when(!hw(10)) {
           // --- Data processing (register): 010000 oooo mmm ddd ----------------
+          // C = T2 | (amount != 0) << 1 with kind CW: C alone for an amount of 0.
+          val cIfNonzero = Seq(sltu(T3, X0, T1), slli(T3, T3, U(1)), flagged(or(T2, T2, T3), CW))
           switch(hw(9 downto 6)) {
-            is(B"0000") { out := and(r20, r20, r53) }          // ANDS
-            is(B"0001") { out := xor(r20, r20, r53) }          // EORS
+            is(B"0000") { out := flagged(and(r20, r20, r53), NZ) }   // ANDS
+            is(B"0001") { out := flagged(xor(r20, r20, r53), NZ) }   // EORS
             // Shifts by a register: the amount is rm[7:0]; 32 and more shift
-            // everything out (LSL, LSR) or behave as 31 (ASR). Results only.
+            // everything out (LSL, LSR) or behave as 31 (ASR). C is computed
+            // in software (Q3): a candidate in T2, then cIfNonzero. The
+            // result's last op sets N and Z.
             is(B"0010") {                                      // LSLS rdn, rm
-              out.seq(andi(T1, r53, B"x0FF"), sll(T4, r20, T1), sltiu(T3, T1, imm(U(32))),
-                      sub(T3, X0, T3), and(r20, T4, T3))
+              out.seq(Seq(andi(T1, r53, B"x0FF"),
+                          sub(T2, X0, T1), srl(T2, r20, T2), sltiu(T3, T1, imm(U(33))), and(T2, T2, T3)) ++
+                      cIfNonzero ++
+                      Seq(sll(T4, r20, T1), sltiu(T3, T1, imm(U(32))), sub(T3, X0, T3),
+                          flagged(and(r20, T4, T3), NZ)): _*)
             }
             is(B"0011") {                                      // LSRS rdn, rm
-              out.seq(andi(T1, r53, B"x0FF"), srl(T4, r20, T1), sltiu(T3, T1, imm(U(32))),
-                      sub(T3, X0, T3), and(r20, T4, T3))
+              out.seq(Seq(andi(T1, r53, B"x0FF"),
+                          addi(T2, T1, B"xFFF"), srl(T2, r20, T2), sltiu(T3, T1, imm(U(33))), and(T2, T2, T3)) ++
+                      cIfNonzero ++
+                      Seq(srl(T4, r20, T1), sltiu(T3, T1, imm(U(32))), sub(T3, X0, T3),
+                          flagged(and(r20, T4, T3), NZ)): _*)
             }
             is(B"0100") {                                      // ASRS rdn, rm
-              out.seq(andi(T1, r53, B"x0FF"), sltiu(T3, T1, imm(U(32))), addi(T3, T3, B"xFFF"),
-                      or(T3, T1, T3), sra(r20, r20, T3))
+              out.seq(Seq(andi(T1, r53, B"x0FF"),
+                          addi(T2, T1, B"xFFF"), sltiu(T3, T2, imm(U(32))), addi(T3, T3, B"xFFF"),
+                          or(T2, T2, T3), srl(T2, r20, T2), andi(T2, T2, B"x001")) ++
+                      cIfNonzero ++
+                      Seq(sltiu(T3, T1, imm(U(32))), addi(T3, T3, B"xFFF"), or(T3, T1, T3),
+                          flagged(sra(r20, r20, T3), NZ)): _*)
             }
-            // ADCS, SBCS: read C, illegal until the flags unit.
-            is(B"0111") {                                      // RORS rdn, rm
-              out.seq(andi(T3, r53, B"x01F"), srl(T4, r20, T3), sub(T3, X0, T3),
-                      sll(T3, r20, T3), or(r20, T4, T3))
+            // ADCS, SBCS: read C, still illegal (Phase 4.3).
+            is(B"0111") {                                      // RORS rdn, rm: C is the result's bit 31
+              out.seq(Seq(andi(T1, r53, B"x0FF"),
+                          andi(T3, T1, B"x01F"), srl(T4, r20, T3), sub(T3, X0, T3), sll(T3, r20, T3),
+                          flagged(or(r20, T4, T3), NZ), srli(T2, r20, U(31))) ++
+                      cIfNonzero: _*)
             }
-            is(B"1000") { out := NOP }                         // TST
-            is(B"1001") { out := sub(r20, X0, r53) }           // RSBS rd, rn, #0
-            is(B"1010") { out := NOP }                         // CMP rn, rm
-            is(B"1011") { out := NOP }                         // CMN
-            is(B"1100") { out := or(r20, r20, r53) }           // ORRS
-            is(B"1101") { out := mul(r20, r53, r20) }          // MULS rdm, rn, rdm
-            is(B"1110") { out.seq(xori(T1, r53, B"xFFF"), and(r20, r20, T1)) }   // BICS
-            is(B"1111") { out := xori(r20, r53, B"xFFF") }     // MVNS
+            is(B"1000") { out := flagged(and(X0, r20, r53), NZ) }    // TST rn, rm
+            is(B"1001") { out := flagged(sub(r20, X0, r53), SUB) }   // RSBS rd, rn, #0
+            is(B"1010") { out := flagged(sub(X0, r20, r53), SUB) }   // CMP rn, rm
+            is(B"1011") { out := flagged(add(X0, r20, r53), ADD) }   // CMN rn, rm
+            is(B"1100") { out := flagged(or(r20, r20, r53), NZ) }    // ORRS
+            // MULS rdm, rn, rdm: the product only exists in writeback, the
+            // flags unit works in execute, so N, Z come from a second op.
+            is(B"1101") { out.seq(mul(r20, r53, r20), flagged(addi(r20, r20, imm(U(0))), NZ)) }
+            is(B"1110") { out.seq(xori(T1, r53, B"xFFF"), flagged(and(r20, r20, T1), NZ)) }   // BICS
+            is(B"1111") { out := flagged(xori(r20, r53, B"xFFF"), NZ) }   // MVNS
           }
         } otherwise {
           // --- Special data processing, branch exchange: 010001 oo ... --------
@@ -263,7 +311,15 @@ object Thumb {
                 out.seq(auipc(T2), addi(T2, T2, imm(U(4))), auipc(T1), add(T1, T1, T2), jalr(X0, T1, imm(U(4))))
               }
             }
-            is(B"01") { out := NOP }             // CMP rn, rm (high registers)
+            is(B"01") {                          // CMP rn, rm (high registers): the PC reads as PC + 4
+              val rn = hw(7) ## hw(2 downto 0)
+              val readN = Seq(auipc(T2), addi(T2, T2, imm(U(4))))
+              val readM = Seq(auipc(T3), addi(T3, T3, imm(U(4))))
+              when(rn =/= pc && rm =/= pc) { out := flagged(sub(X0, reg(rn), reg(rm)), SUB) }
+              when(rn === pc && rm =/= pc) { out.seq(readN :+ flagged(sub(X0, T2, reg(rm)), SUB): _*) }
+              when(rn =/= pc && rm === pc) { out.seq(readM :+ flagged(sub(X0, reg(rn), T3), SUB): _*) }
+              when(rn === pc && rm === pc) { out.seq(readN ++ readM :+ flagged(sub(X0, T2, T3), SUB): _*) }
+            }
             is(B"10") {                          // MOV rd, rm
               when(rdn === pc) {
                 when(rm =/= pc) { out := jalr(X0, reg(rm)) }          // MOV pc, rm: a jump
@@ -481,10 +537,10 @@ class ThumbExpander extends Component {
     val hw2 = in Bits(16 bits)
     val pc1 = in Bool()
     val step = in UInt(4 bits)
-    val op = out Bits(32 bits)
+    val op = out Bits(40 bits)    // side-band ## op, as the model's ops
     val last = out Bool()
   }
   val result = Thumb.expand(io.hw1, io.hw2, io.pc1, io.step)
-  io.op := result.op
+  io.op := result.side ## result.op
   io.last := result.last
 }

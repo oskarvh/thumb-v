@@ -170,6 +170,7 @@ class ThumbIBusSimplePlugin(    resetVector : BigInt,
         fetchRsp.thumb := False                        // THUMBV: set by the decompressor
         fetchRsp.raw := rspBuffer.output.payload.inst  // THUMBV
         fetchRsp.last0 := True                         // THUMBV
+        fetchRsp.side0 := 0                            // THUMBV
         fetchRsp.pc := stages.last.output.payload
         fetchRsp.rsp := rspBuffer.output.payload
         fetchRsp.rsp.error.clearWhen(!rspBuffer.output.valid) //Avoid interference with instruction injection from the debug plugin

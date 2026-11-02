@@ -70,6 +70,7 @@ module thumbv_soc #(
         .externalInterrupt        (1'b0),
         .softwareInterrupt        (1'b0),
         // The retire trace (RVFI) is read by the simulation testbench only.
+        .thumbNzcv (),            // NZCV after each retired op: read by sim/tb.sv for the trace
         .rvfi_valid (), .rvfi_order (), .rvfi_insn (), .rvfi_trap (), .rvfi_halt (),
         .rvfi_intr (), .rvfi_mode (), .rvfi_ixl (),
         .rvfi_rs1_addr (), .rvfi_rs1_rdata (), .rvfi_rs2_addr (), .rvfi_rs2_rdata (),
