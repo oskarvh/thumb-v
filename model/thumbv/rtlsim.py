@@ -194,7 +194,7 @@ def run(images, out_dir: Path, max_cycles: int = 10_000_000, trace: bool = True,
 
 
 # The hardware's expander mode until its flags unit (Phase 4): results only.
-HARDWARE = Options(flags="C", flag_readers=False)
+HARDWARE = Options(flags="C")
 
 
 def lockstep(images, result: Result, options: Options = HARDWARE) -> Divergence | None:

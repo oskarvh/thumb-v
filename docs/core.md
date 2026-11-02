@@ -81,10 +81,11 @@ In the injector, the sequencer (Phase 3.1, [vexriscv-notes.md](vexriscv-notes.md
   - kind `CW` writes C from the result's bit 0 if its bit 1 is set.
 
   NZCV is written when execute fires, for flag-writing kinds only (a CSR write has kind 0).
-- **No hazards:** flags are written in execute, and every reader (the carry-in, CSR reads, and from 4.3 conditional branches) is in execute too. In order, a reader always sees every older instruction's write, with no stall.
+- **Conditional branches (4.3):** `B<cond>` is `beq x0, x0, off` with kind `BRANCH` and the condition. The stock `beq` is always taken; in execute the unit overrides `BranchPlugin`'s `BRANCH_DO` with the condition on NZCV, and `BranchPlugin` applies it in memory as for any branch. There is no branch prediction, so nothing else needs to know.
+- **No hazards:** flags are written in execute, and every reader (the carry-in, CSR reads, conditional branches) is in execute too. In order, a reader always sees every older instruction's write, with no stall.
 - **Trace:** the core's `thumbNzcv` output is NZCV after the op retiring in writeback (sampled in memory, where the register holds exactly that), logged by the testbench beside the RVFI record. The lockstep compares it after every op. The SoC leaves it unconnected.
-- **Still illegal (until 4.3):** the instructions that read the flags: `ADCS`, `SBCS`, `B<cond>`, `MRS`/`MSR` of the APSR. The reference is the model's `rtlsim.HARDWARE`, `Options(flags="C", flag_readers=False)`.
-- **Cost:** 267 LEs; Fmax 32.95 MHz, with the same critical path as before ([resources.md](resources.md)).
+- **The readers (4.3):** `ADCS`/`SBCS` are one `add`/`sub` with kind `ADC`/`SBC`; `MRS`/`MSR APSR` are `csrrs rd, 0x7C4, x0` / `csrrw x0, 0x7C4, rn`. The reference is the model's `rtlsim.HARDWARE`, `Options(flags="C")`, exactly.
+- **Cost:** 267 LEs for the unit and the writers, 134 more for the readers; Fmax 35.0 MHz, with the same critical path as before ([resources.md](resources.md)).
 
 **The expander** (`Thumb.scala`, Phase 2.2) turns each Thumb instruction into one RV32 op.
 - **What it covers:** every instruction whose expansion in the model is a single op, with the model's `Options(flags="none")`, bit for bit. That is 39,056 of the 63,488 16-bit halfwords, `BL` within ±1 MiB, and the barriers. It includes:
@@ -109,7 +110,8 @@ In the injector, the sequencer (Phase 3.1, [vexriscv-notes.md](vexriscv-notes.md
   - `MSR`/`MRS` of PRIMASK, through `mstatus.MIE` (5 and 4 ops).
 
   With these, the RTL expands every instruction the model does in result-only mode.
-- **Everything else:** the instructions that read the flags (`ADCS`, `SBCS`, `B<cond>`, `MRS`/`MSR` of the APSR) until Phase 4.3, `MRS`/`MSR` of the other special registers (the trap handler's job, Q7), undefined encodings and `UDF` become the all-zero illegal instruction. They trap with `mepc` at their own address.
+- **The flag readers (Phase 4.3):** `B<cond>`, `ADCS`, `SBCS`, `MRS`/`MSR` of the APSR, one op each. The RTL now expands exactly the model's strategy C.
+- **Everything else:** `MRS`/`MSR` of the other special registers (the trap handler's job, Q7), undefined encodings and `UDF` become the all-zero illegal instruction. They trap with `mepc` at their own address.
 - **Strategy C (Phase 4.2):** every flag-writing instruction, as the model's strategy C: one op with a flags kind for most, two for `MULS`, `BICS` and `LSRS`/`ASRS` by 32, 10–14 for the shifts by a register (C in software, then kind `CW`), and `CMP` with a high register reads the PC as the model does.
 - **The check:** `tests/test_expander_rtl.py` compares the expander, generated on its own as `ThumbExpander.v`, against the model op by op, side-band included (40 bits): every 16-bit instruction at both PC alignments and about 518,000 32-bit instructions ([architecture.md](architecture.md)).
 

@@ -182,6 +182,59 @@ def test_thumb_flag_writers(rtl_simulator, build_mixed, tmp_path):
     assert len({r.nzcv for r in result.trace}) >= 10
 
 
+VALUES = [(0, 0, 0, 0), (0xFFFFFFFF,) * 4, (1, 0, 0, 0), (0xFFFFFFFF, 0, 0x7FFFFFFF, 0x80000000),
+          (0x12345678, 0x9ABCDEF0, 0x0FEDCBA9, 0x87654321)]
+
+
+def readers_oracle():
+    """What rtl_thumb_readers_main.c returns, from ARM's definitions alone."""
+    conds = [
+        lambda n, z, c, v: z, lambda n, z, c, v: not z, lambda n, z, c, v: c, lambda n, z, c, v: not c,
+        lambda n, z, c, v: n, lambda n, z, c, v: not n, lambda n, z, c, v: v, lambda n, z, c, v: not v,
+        lambda n, z, c, v: c and not z, lambda n, z, c, v: not c or z,
+        lambda n, z, c, v: n == v, lambda n, z, c, v: n != v,
+        lambda n, z, c, v: not z and n == v, lambda n, z, c, v: z or n != v,
+    ]
+    h = 0
+
+    def mix(x):
+        nonlocal h
+        h = (h * 31 + x) & 0xFFFF_FFFF
+
+    for cond in conds:
+        mix(sum(1 << k for k in range(16) if cond(k >> 3 & 1, k >> 2 & 1, k >> 1 & 1, k & 1)))
+    words = lambda t: sum(w << 32 * i for i, w in enumerate(t))
+    for a in VALUES:
+        for b in VALUES:
+            x, y = words(a), words(b)
+            for sub in (False, True):
+                r = (x - y if sub else x + y) % (1 << 128)
+                carry = x >= y if sub else x + y >= 1 << 128     # C: NOT borrow for subtraction
+                sa, sb, sr = a[3] >> 31, b[3] >> 31, r >> 127
+                v = (sa != sb if sub else sa == sb) and sr != sa
+                z = r >> 96 == 0                                  # Z: of the last word only
+                mix(sr << 31 | int(z) << 30 | int(carry) << 29 | int(v) << 28)
+                for i in range(4):
+                    mix(r >> 32 * i & 0xFFFF_FFFF)
+    for k in range(16):
+        mix(k << 28)
+    return h
+
+
+def test_thumb_flag_readers(rtl_simulator, build_mixed, tmp_path):
+    """Phase 4.3: B<cond> under every condition and NZCV, ADCS/SBCS carry
+    chains (128-bit add and subtract), MSR/MRS of the APSR. In lockstep with
+    the model, and the result against ARM's definitions computed in Python."""
+    rv_elf, thumb_elf = build_mixed(["rtl_thumb_readers.S"], ["rtl_thumb_readers_main.c"])
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    names = {name for (pc, name), n in thumb_instructions_run(images, result).items()}
+    assert names >= {"B_cond", "ADCS", "SBCS", "MSR", "MRS"}
+    assert result.a0 == readers_oracle()
+
+
 @pytest.mark.parametrize("seed", [1, 2, 3])
 def test_interrupts_land_between_thumb_instructions(rtl_simulator, build_mixed, tmp_path, seed):
     """Phase 3.4 (D3): with the timer interrupt raised every few cycles, Thumb

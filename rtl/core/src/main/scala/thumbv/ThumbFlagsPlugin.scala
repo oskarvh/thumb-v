@@ -24,7 +24,8 @@ object ThumbFlagsPlugin {
   *    result only reaches REGFILE_WRITE_DATA in memory;
   *  - from REGFILE_WRITE_DATA otherwise (NZ, CW).
   * It writes them when execute fires. Every flag read (the carry-in, CSR
-  * reads, conditional branches) is in execute too, so a reader always sees
+  * reads, conditional branches: kind BRANCH overrides BRANCH_DO) is in
+  * execute too, so a reader always sees
   * the writes of every older instruction, with no stall.
   *
   * The model (thumbv.machine, Machine._execute_flagged) is the reference.
@@ -46,6 +47,7 @@ class ThumbFlagsPlugin(val csrAddress: Int = 0x7C4) extends Plugin[VexRiscv] {
 
     pipeline.service(classOf[CsrInterface]).rw(csrAddress, 28, nzcv)
     val shifter = pipeline.service(classOf[FullBarrelShifterPlugin])
+    val branch = pipeline.service(classOf[BranchPlugin])
 
     execute plug new Area {
       import execute._
@@ -87,6 +89,22 @@ class ThumbFlagsPlugin(val csrAddress: Int = 0x7C4) extends Plugin[VexRiscv] {
       when(kind === Flags.CW && result(1)) { next(1) := result(0) }
       // Only for flag-writing kinds: a CSR write of NZCV has kind 0.
       when(arbitration.isFiring && (kind === Flags.NZ || shift || arith || kind === Flags.CW)) { nzcv := next }
+
+      // B<cond>: an always-taken beq x0, x0 whose BRANCH_DO (decided here,
+      // applied by BranchPlugin in memory) is the ARM condition on NZCV.
+      val (fn, fz, fc, fv) = (nzcv(3), nzcv(2), nzcv(1), nzcv(0))
+      val cond = input(SIDE)(7 downto 4)
+      val holds = cond(3 downto 1).mux(
+        0 -> fz,                    // EQ, NE
+        1 -> fc,                    // CS, CC
+        2 -> fn,                    // MI, PL
+        3 -> fv,                    // VS, VC
+        4 -> (fc && !fz),           // HI, LS
+        5 -> (fn === fv),           // GE, LT
+        6 -> (!fz && fn === fv),    // GT, LE
+        7 -> True                   // AL: never emitted
+      ) ^ cond(0)
+      when(kind === Flags.BRANCH) { output(branch.BRANCH_DO) := holds }
     }
 
     // For the retire trace: in memory, the register holds the flags after

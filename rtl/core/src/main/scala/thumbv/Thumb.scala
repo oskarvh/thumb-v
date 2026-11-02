@@ -48,6 +48,11 @@ object Rv {
     imm20 ## rd ## op(opcode)
   }
 
+  def b(funct3: Int, rs1: UInt, rs2: UInt, off: Bits): Bits = {
+    assert(off.getWidth == 13)
+    off(12) ## off(10 downto 5) ## rs2 ## rs1 ## f3(funct3) ## off(4 downto 1) ## off(11) ## op(0x63)
+  }
+
   def jal(rd: UInt, off: Bits): Bits = {
     assert(off.getWidth == 21)
     off(20) ## off(10 downto 1) ## off(11) ## off(19 downto 12) ## rd ## op(0x6F)
@@ -66,7 +71,9 @@ object Rv {
   def sltu(rd: UInt, rs1: UInt, rs2: UInt) = r(0x00, 3, rd, rs1, rs2)
   def sltiu(rd: UInt, rs1: UInt, imm: Bits) = i(3, rd, rs1, imm)
   def lui(rd: UInt, imm20: Bits) = u(rd, imm20, 0x37)
+  def csrrw(rd: UInt, csr: Int, rs1: UInt) = i(1, rd, rs1, B(csr, 12 bits), 0x73)
   def csrrs(rd: UInt, csr: Int, rs1: UInt) = i(2, rd, rs1, B(csr, 12 bits), 0x73)
+  def beq(rs1: UInt, rs2: UInt, off: Bits) = b(0, rs1, rs2, off)
   def addi(rd: UInt, rs1: UInt, imm: Bits) = i(0, rd, rs1, imm)
   def xori(rd: UInt, rs1: UInt, imm: Bits) = i(4, rd, rs1, imm)
   def andi(rd: UInt, rs1: UInt, imm: Bits) = i(7, rd, rs1, imm)
@@ -182,12 +189,10 @@ object Thumb {
   /** Op `step` of a Thumb instruction's expansion (hw2 only matters for
     * 32-bit instructions; pc1 is bit 1 of the instruction's address).
     *
-    * The model, model/thumbv/expander.py with Options(flags = "C",
-    * flag_readers = False) (rtlsim.HARDWARE), is the reference, op for op and
-    * bit for bit, side-band included, for every instruction. Flag-setting
-    * instructions are strategy C (Phase 4.2). Instructions that read the
-    * flags (ADCS, SBCS, B<cond>, the APSR) are still the all-zero illegal
-    * instruction, as in that mode. tests/test_expander_rtl.py checks this for every 16-bit
+    * The model, model/thumbv/expander.py with Options(flags = "C")
+    * (rtlsim.HARDWARE), is the reference, op for op and bit for bit, side-band
+    * included, for every instruction: strategy C, the hardware flags unit
+    * (ThumbFlagsPlugin, Phase 4). tests/test_expander_rtl.py checks this for every 16-bit
     * instruction at both alignments, and a large sweep of 32-bit ones.
     */
   def expand(hw1: Bits, hw2: Bits, pc1: Bool, step: UInt): ThumbOp = {
@@ -274,7 +279,8 @@ object Thumb {
                       Seq(sltiu(T3, T1, imm(U(32))), addi(T3, T3, B"xFFF"), or(T3, T1, T3),
                           flagged(sra(r20, r20, T3), NZ)): _*)
             }
-            // ADCS, SBCS: read C, still illegal (Phase 4.3).
+            is(B"0101") { out := flagged(add(r20, r20, r53), ADC) }  // ADCS rdn, rm: + C
+            is(B"0110") { out := flagged(sub(r20, r20, r53), SBC) }  // SBCS rdn, rm: - NOT C
             is(B"0111") {                                      // RORS rdn, rm: C is the result's bit 31
               out.seq(Seq(andi(T1, r53, B"x0FF"),
                           andi(T3, T1, B"x01F"), srl(T4, r20, T3), sub(T3, X0, T3), sll(T3, r20, T3),
@@ -471,7 +477,10 @@ object Thumb {
 
       // --- Branches and exception generation ----------------------------------
       is(B"11010", B"11011") {
-        // B<cond> reads the flags and UDF is undefined: both illegal.
+        // B<cond>: pc + 4 + imm8 * 2, taken if the condition holds on NZCV
+        // (kind BRANCH on an always-taken beq). Condition 1110 is UDF: illegal.
+        val off = (hw(7 downto 0).asSInt.resize(13) |<< 1) + 4
+        when(hw(11 downto 9) =/= B"111") { out := flagged(beq(X0, X0, off.asBits), BRANCH, hw(11 downto 8)) }
         when(hw(11 downto 8) === B"1111") { out := ECALL }     // SVC
       }
       is(B"11100") {                                           // B: pc + 4 + imm11 * 2
@@ -507,12 +516,15 @@ object Thumb {
         is(B"x8F6") { out := FENCE_I }
       }
     }
-    // MSR, MRS: PRIMASK inline, through mstatus.MIE (PRIMASK = 1 masks, so
-    // MIE = NOT PRIMASK). The APSR is illegal without a flags unit; the other
-    // special registers, and SP or PC as the operand, trap to the handler.
+    // MSR, MRS: the APSR is the flags unit's CSR, NZCV in bits 31:28; PRIMASK
+    // inline, through mstatus.MIE (PRIMASK = 1 masks, so MIE = NOT PRIMASK).
+    // The other special registers, and SP or PC as the operand, trap to the
+    // handler.
     val mstatus = 0x300
+    val nzcv = 0x7C4                               // ThumbFlagsPlugin
     when(hw1(15 downto 4) === B"xF38" && hw2(15 downto 8) === B"x88") {     // MSR spec_reg, rn
       val n = hw1(3 downto 0)
+      when(hw2(7 downto 0) === 0 && n =/= 13 && n =/= 15) { out := csrrw(X0, nzcv, reg(n)) }
       when(hw2(7 downto 0) === 16 && n =/= 13 && n =/= 15) {
         out.seq(andi(T1, reg(n), B"x001"), xori(T1, T1, B"x001"), slli(T1, T1, U(3)),
                 CSRRCI_MSTATUS_MIE, csrrs(X0, mstatus, T1))
@@ -520,6 +532,7 @@ object Thumb {
     }
     when(hw1 === B"xF3EF" && hw2(15 downto 12) === B"1000") {               // MRS rd, spec_reg
       val d = hw2(11 downto 8)
+      when(hw2(7 downto 0) === 0 && d =/= 13 && d =/= 15) { out := csrrs(reg(d), nzcv, X0) }
       when(hw2(7 downto 0) === 16 && d =/= 13 && d =/= 15) {
         out.seq(csrrs(T1, mstatus, X0), srli(T1, T1, U(3)), andi(T1, T1, B"x001"), xori(reg(d), T1, B"x001"))
       }

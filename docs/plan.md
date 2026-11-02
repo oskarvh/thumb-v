@@ -411,15 +411,24 @@ Goal: every Thumb instruction runs in hardware with its ARM flags, using the har
    - **Exhaustive check:** extends to the side-band.
    - **Done:**
      - **The unit:** `ThumbFlagsPlugin` (NZCV, CSR `0x7C4`, flags computed in execute) and `ThumbSrcPlugin` (the `SrcPlugin` copy with forced subtraction and the carry-in), with the side-band through the fetcher and decode as designed ([core.md](core.md#thumb-v-changes)).
-     - **Interim mode:** the model's `Options(flags="C", flag_readers=False)` is `rtlsim.HARDWARE`.
+     - **Interim mode:** the model had `Options(flags="C", flag_readers=False)` as `rtlsim.HARDWARE`, removed again in 4.3.
      - **Exhaustive check:** passed first time with the 40-bit ops.
      - **Lockstep with flags:** the core's `thumbNzcv` output is logged with every retired op and compared with the model's NZCV. Its first run found a real bug: N and Z of a shift op with kind `NZ` (the last op of `ASRS` by a register) came from `REGFILE_WRITE_DATA`, which VexRiscv's shifter only fills in memory. They now come from `SHIFT_RIGHT` for any shift. The exhaustive check can't see this; only running the core can.
      - **Directed test:** `test_thumb_flag_writers` runs every flag writer on nine edge-case operand pairs, with all 27 flag-writing encodings executed. A deliberately wrong V in the RTL fails it.
      - **On the board:** the callback program still runs. 5,881 LEs (+267), Fmax 33.0 MHz.
-3. **Instructions that read flags:** `B<cond>` (all 14 conditions), `ADCS`/`SBCS`, `MRS`/`MSR APSR`. The RTL then expands exactly strategy C, and `rtlsim.HARDWARE` becomes `Options(flags="C")`. Directed assembly tests, in lockstep:
+3. **Instructions that read flags:** (done) `B<cond>` (all 14 conditions), `ADCS`/`SBCS`, `MRS`/`MSR APSR`. The RTL then expands exactly strategy C, and `rtlsim.HARDWARE` becomes `Options(flags="C")`. Directed assembly tests, in lockstep:
    - every condition taken and not taken;
    - carry chains through `ADCS`/`SBCS` (64-bit add and subtract);
    - flags across `MSR`/`MRS`.
+   - **Done:**
+     - **RTL:** `B<cond>` is `beq x0, x0` with kind `BRANCH`, whose `BRANCH_DO` the flags unit overrides in execute with the condition on NZCV, through VexRiscv's stage mechanism, with no change to `BranchPlugin`. `ADCS`/`SBCS` use the carry-in from 4.2, `MRS`/`MSR APSR` the CSR. `rtlsim.HARDWARE` is `Options(flags="C")`. The exhaustive check passed first time.
+     - **Directed test:** `test_thumb_flag_readers` (`tests/c/rtl_thumb_readers.S`), in lockstep, and its result against ARM's definitions computed independently in Python:
+       - all 14 conditions under all 16 NZCV values, taken and not, forward and backward;
+       - 128-bit add and subtract (`ADDS` + 3 `ADCS`, `SUBS` + 3 `SBCS`) on 25 operand pairs, with the APSR read back by `MRS`;
+       - `MSR`/`MRS` round trips.
+     - **The oracle found its own bug,** not the core's: Z after an `ADCS` chain is the last word's, not the whole value's.
+     - **Negative control:** a wrong HI condition in the RTL fails the test (wrong branch at the first HI).
+     - **Cost:** 6,015 LEs (+134), Fmax 35.0 MHz; the board still runs the callback program.
 4. **gcc code with loops and conditions.**
    - **What runs:**
      - Phase 0 corpus programs, Thumb-only and mixed, on the RTL in lockstep;
@@ -478,6 +487,6 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board). Phase 3 is done: 3.1–3.3 (the sequencer and every multi-op expansion), 3.4 (interrupts at Thumb boundaries), 3.5 (calls in both directions, in simulation and on the board). Phase 4: 4.1 (strategy C in the model), 4.2 (the flags unit and flag writers in the RTL).
+Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board). Phase 3 is done: 3.1–3.3 (the sequencer and every multi-op expansion), 3.4 (interrupts at Thumb boundaries), 3.5 (calls in both directions, in simulation and on the board). Phase 4: 4.1 (strategy C in the model), 4.2 (the flags unit and flag writers in the RTL), 4.3 (the flag readers: the RTL is now all of strategy C).
 
-1. Phase 4, step 3: the instructions that read flags (`B<cond>`, `ADCS`/`SBCS`, `MRS`/`MSR APSR`).
+1. Phase 4, step 4: gcc-compiled code with loops and conditions, in lockstep, under interrupts and on the board.
