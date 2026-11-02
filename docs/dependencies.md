@@ -12,7 +12,7 @@ Everything Thumb-V depends on, including what later phases will need. Install in
 | arm-none-eabi-gcc + binutils | Thumb test programs, Cortex-M0 libraries and benchmarks | Phase 0 | 13.2.1 (13.2.rel1) | `gcc-arm-none-eabi` | GPL-3.0 with runtime exception |
 | newlib for ARM | C library (string functions, libm, stub syscalls) for the Cortex-M0 benchmarks | Phase 0.5 | 4.4.0 | `libnewlib-arm-none-eabi` (install explicitly with `--no-install-recommends`) | BSD-style |
 | riscv64-unknown-elf-gcc + binutils | RV32 programs, firmware (`-march=rv32im -mabi=ilp32`; rv32e multilibs included) | Phase 0 | 13.2.0 | `gcc-riscv64-unknown-elf` | GPL-3.0 with runtime exception |
-| picolibc for RISC-V | C library for RV32 programs that need one (not needed so far: the RISC-V test programs are freestanding) | when needed | — | `picolibc-riscv64-unknown-elf` | BSD-style |
+| picolibc for RISC-V | C library for RV32 programs that need one: CMSIS-DSP's RISC-V build and programs that include its headers (Phase 5.4). The other RISC-V test programs are freestanding | Phase 5.4 | 1.8.6 | `picolibc-riscv64-unknown-elf` | BSD-style |
 | Verilator | linting the generated core, RTL simulation | Phase 1 | 5.020 | `verilator` | LGPL-3.0 / Artistic-2.0 |
 | GTKWave or Surfer (optional) | viewing waveforms from `rtlsim --wave` | Phase 1 | — | `gtkwave`; Surfer from [surfer-project.org](https://surfer-project.org/) | GPL-2.0; EUPL-1.2 |
 | Java (JDK) | SpinalHDL / VexRiscv generation | Phase 1 | OpenJDK 21 | `openjdk-21-jdk` | GPL-2.0 with classpath exception |
@@ -48,7 +48,8 @@ Unicorn is GPL-2.0 while the project is Apache-2.0. That's fine for a developmen
 |---|---|---|---|
 | CoreMark | correctness and expansion-ratio measurements, later board performance. Submodule `third_party/coremark`, pinned at `1f483d5` | Phase 0.5 | Apache-2.0 (with EEMBC reporting terms) |
 | Embench IoT | additional benchmark programs. Submodule `third_party/embench-iot`, pinned at `09c2ed8`; only built and run, never modified or copied into the repo | Phase 0.5 | GPL-3.0 |
-| A prebuilt Cortex-M0 library (DSP or crypto) | real-world mixed-execution test | Phase 5 | not chosen |
+| CMSIS-DSP | a prebuilt Cortex-M0 library called from RISC-V (Phase 5.4). Submodule `third_party/CMSIS-DSP`, pinned at v1.18.0 (`4b6f2659`); built, never modified | Phase 5.4 | Apache-2.0 |
+| CMSIS_6 | CMSIS-Core headers for CMSIS-DSP's Cortex-M0 build. Submodule `third_party/CMSIS_6`, pinned at v6.4.0 (`af1b110e`) | Phase 5.4 | Apache-2.0 |
 | FreeRTOS or Zephyr | RTOS with Thumb tasks | Phase 5 | MIT / Apache-2.0 |
 
 ## Hardware

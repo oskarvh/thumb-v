@@ -144,6 +144,7 @@ PROGRAMS = {
     "callback": (["callback.c"], ["callback_main.c"], "callback.h"),     # 3.5: and back
     "loops": (["loops.c"], ["loops_main.c", "loops_run.c"], None),       # 4.4: loops and conditions
     "tick": (["tick_thumb.c"], ["tick_main.c"], None),                   # 5.3: a Thumb SysTick handler
+    "dsp": ([], ["dsp_main.c"], "cmsis_dsp.h"),                          # 5.4: CMSIS-DSP's Cortex-M0 build
 }
 
 
@@ -152,7 +153,12 @@ def build_program(name: str) -> list[Path]:
     thumb, rv, interface = PROGRAMS[name]
     out = BOARD_DIR / name
     out.mkdir(parents=True, exist_ok=True)
-    if thumb:   # the firmware (Phase 5.3) costs nothing unless a program calls it
+    if name == "dsp":   # a prebuilt Cortex-M0 library, linked as a binary (Phase 5.4)
+        return list(recipes.mixed_program(
+            thumb, rv, out, interface, firmware=True, thumb_libs=[recipes.cmsis_dsp_library("thumb")],
+            thumb_flags=recipes.cmsis_dsp_flags("thumb"), rv_flags=recipes.cmsis_dsp_flags("rv32"),
+            rv_libs=recipes.rv_libc()))
+    if thumb or interface:   # the firmware (Phase 5.3) costs nothing unless a program calls it
         return list(recipes.mixed_program(thumb, rv, out, interface, firmware=True))
     return [recipes.c_program("rv32", rv, out, firmware=True)]
 

@@ -79,8 +79,9 @@ def build_asm(tmp_path):
 
 @pytest.fixture
 def build_c(tmp_path):
-    """Build a C program from tests/c/: build_c("thumb", "prog.c"), firmware=True to link firmware/."""
-    return _tools(lambda kind, *names, firmware=False: build.c_program(kind, names, tmp_path, firmware))
+    """Build a C program from tests/c/: build_c("thumb", "prog.c"), with build.c_program's
+    keywords (firmware=True to link firmware/, libs, flags)."""
+    return _tools(lambda kind, *names, **kw: build.c_program(kind, names, tmp_path, **kw))
 
 
 @pytest.fixture
@@ -97,10 +98,16 @@ def build_thumb_asm(tmp_path):
 
 @pytest.fixture
 def build_mixed(tmp_path):
-    """Build a mixed program: build_mixed(["lib.c"], ["main.c"], interface=None, firmware=False)
-    -> (rv_elf, thumb_elf)."""
-    return _tools(lambda thumb_names, rv_names, interface=None, firmware=False:
-                  build.mixed_program(thumb_names, rv_names, tmp_path, interface, firmware))
+    """Build a mixed program: build_mixed(["lib.c"], ["main.c"], interface=None, ...) with
+    build.mixed_program's keywords -> (rv_elf, thumb_elf)."""
+    return _tools(lambda thumb_names, rv_names, interface=None, **kw:
+                  build.mixed_program(thumb_names, rv_names, tmp_path, interface, **kw))
+
+
+@pytest.fixture
+def cmsis_dsp():
+    """CMSIS-DSP's libraries (build.cmsis_dsp_library): {"thumb": ..., "rv32": ...}."""
+    return _tools(lambda: {kind: build.cmsis_dsp_library(kind) for kind in ("thumb", "rv32")})()
 
 
 @pytest.fixture

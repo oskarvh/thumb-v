@@ -18,7 +18,7 @@ See [`architecture.puml`](architecture.puml) for the pipeline diagram and [`docs
 On Ubuntu 24.04:
 
 ```sh
-sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi gcc-riscv64-unknown-elf
+sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf
 make setup        # submodules and Python environment (needs uv)
 make check-tools  # see what is installed
 make test         # make test-slow also runs the benchmarks in lockstep

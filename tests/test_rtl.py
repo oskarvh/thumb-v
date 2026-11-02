@@ -5,6 +5,8 @@ without them unless THUMBV_REQUIRE_RTL=1.
 """
 
 import dataclasses
+import math
+import struct
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -526,6 +528,36 @@ def test_firmware_systick_tick(rtl_simulator, build_mixed, tmp_path):
     assert result.status == "TIMEOUT"                 # it runs forever
     assert result.uart.splitlines()[:3] == ["SysTick at 10 Hz, Thumb handler", "tick 00000001",
                                             "tick 00000002"]
+
+
+def test_cmsis_dsp(rtl_simulator, build_mixed, build_c, cmsis_dsp, tmp_path):
+    """Phase 5.4: RISC-V code calling CMSIS-DSP's Cortex-M0 build, linked as
+    a binary through the interface cmsis_dsp.h (three calls need thunks: a
+    fifth argument goes on the stack under AAPCS), in lockstep with the
+    model. It must print what the same program prints with CMSIS-DSP built
+    for RISC-V, and a few results are checked against their definitions."""
+    flags = build.cmsis_dsp_flags
+    rv_elf, thumb_elf = build_mixed([], ["dsp_main.c"], "cmsis_dsp.h", thumb_libs=[cmsis_dsp["thumb"]],
+                                    thumb_flags=flags("thumb"), rv_flags=flags("rv32"),
+                                    rv_libs=build.rv_libc())
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    (tmp_path / "mixed").mkdir()
+    result = run(images, tmp_path / "mixed")
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    native = elf.load(build_c("rv32", "dsp_main.c", libs=[cmsis_dsp["rv32"], *build.rv_libc()],
+                              flags=flags("rv32")))
+    (tmp_path / "native").mkdir()
+    reference = run([native], tmp_path / "native")
+    assert result.uart == reference.uart
+    v = {line[:18].strip(): int(line[18:], 16) for line in result.uart.splitlines()[1:]}
+    assert v["arm_sqrt_q31"] == 0x4000_0000 and v["status"] == 0       # sqrt(0.25) = 0.5
+    assert v["negative"] == 0xFFFF_FFFF            # ARM_MATH_ARGUMENT_ERROR: a 1-byte enum, sign-extended
+    assert v["size mismatch"] == 0xFFFF_FFFD       # ARM_MATH_SIZE_MISMATCH
+    assert v["arm_fir_init_q15"] == 0 and v["arm_mat_mult_f32"] == 0
+    sin = lambda name: struct.unpack("<f", struct.pack("<I", v[name]))[0]
+    assert abs(sin("arm_sin_f32(0.5)") - math.sin(0.5)) < 1e-5
+    assert abs(sin("arm_sin_f32(-2)") - math.sin(-2)) < 1e-5
 
 
 def thumb_region(images, addr):

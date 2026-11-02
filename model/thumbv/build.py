@@ -30,6 +30,11 @@ LINK_DIR = REPO / "tests" / "link"
 BENCH_DIR = REPO / "tests" / "bench"
 COREMARK = REPO / "third_party" / "coremark"
 EMBENCH = REPO / "third_party" / "embench-iot"
+CMSIS_DSP = REPO / "third_party" / "CMSIS-DSP"
+CMSIS_CORE = REPO / "third_party" / "CMSIS_6" / "CMSIS" / "Core" / "Include"
+# picolibc, the C library for the RISC-V side where one is needed (Phase 5.4):
+# Debian's picolibc-riscv64-unknown-elf package.
+PICOLIBC = Path("/usr/lib/picolibc/riscv64-unknown-elf")
 
 IMPORT_BASE = 0x0002_0004  # after the reset jump at the start of RV32 ROM, see tests/link/rv32.ld
 
@@ -65,13 +70,16 @@ def _linker_script(name):
     return f"-Wl,-T,{LINK_DIR / name}"
 
 
-def c_program(kind: str, names, out_dir: Path, firmware: bool = False) -> Path:
+def c_program(kind: str, names, out_dir: Path, firmware: bool = False, libs=(), flags=()) -> Path:
     """A C program from tests/c/ with its startup file (set SP, call main, spin at `done`).
-    `firmware` (RISC-V only): link the trap entry routine from firmware/."""
+    `firmware` (RISC-V only): link the trap entry routine from firmware/.
+    `libs`, `flags`: extra static libraries and compiler flags."""
     sources = [C_DIR / f"crt_{kind}.S", *(C_DIR / n for n in names), *(FIRMWARE if firmware else [])]
     out = out_dir / (Path(names[0]).stem + ".elf")
-    return compile_and_link(kind, sources, out, [*C_FLAGS[kind], f"-I{FIRMWARE_DIR}",
-                                                 _linker_script(f"{kind}.ld")], ["-lgcc"])
+    gc = ["-Wl,--gc-sections"] if libs else []
+    return compile_and_link(kind, sources, out, [*C_FLAGS[kind], f"-I{FIRMWARE_DIR}", *flags,
+                                                 _linker_script(f"{kind}.ld"), *gc],
+                            [*map(str, libs), "-lgcc"])
 
 
 def thumb_asm_program(source: Path, out: Path) -> Path:
@@ -80,7 +88,8 @@ def thumb_asm_program(source: Path, out: Path) -> Path:
 
 
 def mixed_program(thumb_names, rv_names, out_dir: Path, interface: str | None = None,
-                  firmware: bool = False) -> tuple[Path, Path]:
+                  firmware: bool = False, thumb_libs=(), thumb_flags=(), rv_libs=(),
+                  rv_flags=()) -> tuple[Path, Path]:
     """A Thumb library from tests/c/, then a RISC-V program linked against it.
 
     Without an interface header, the library's global functions become
@@ -94,6 +103,13 @@ def mixed_program(thumb_names, rv_names, out_dir: Path, interface: str | None = 
     Thumb code can call the declared RISC-V functions by name through the
     import jump table. `firmware` links the trap entry routine from firmware/
     into the RISC-V side (Phase 5.3); both sides can include its headers.
+
+    `thumb_libs`: static libraries for the Thumb side, linked as binaries
+    (Phase 5.4: a prebuilt Cortex-M0 library). The interface's exports are
+    kept (--undefined) and everything unused is dropped (--gc-sections), and
+    the Thumb side gets newlib. `thumb_flags`/`rv_flags`, `rv_libs`: extra
+    compiler flags and libraries for each side.
+
     Returns (rv_elf, thumb_elf).
     """
     thumb_sources = [C_DIR / n for n in thumb_names]
@@ -106,9 +122,13 @@ def mixed_program(thumb_names, rv_names, out_dir: Path, interface: str | None = 
         thumb_sources.append(out_dir / "interwork_thumb.S")
         rv_sources.append(out_dir / "interwork_rv32.S")
 
+    keep = [f"-Wl,--undefined={name}" for name in (gen.export_symbols if gen else [])]
+    gc = ["-Wl,--gc-sections"] if thumb_libs else []
     thumb = compile_and_link(
         "thumb", thumb_sources, out_dir / "lib_thumb.elf",
-        [*C_FLAGS["thumb"], f"-I{FIRMWARE_DIR}", _linker_script("thumb_lib.ld"), "-Wl,--entry=0"], ["-lgcc"])
+        [*C_FLAGS["thumb"], f"-I{FIRMWARE_DIR}", *thumb_flags, _linker_script("thumb_lib.ld"),
+         "-Wl,--entry=0", *keep, *gc],
+        [*map(str, thumb_libs), *(NEWLIB if thumb_libs else ["-lgcc"])])
     functions = elf.load(thumb).functions
     if gen:
         exports = {gen.export_symbols[name]: functions[name] for name in gen.export_symbols}
@@ -117,12 +137,84 @@ def mixed_program(thumb_names, rv_names, out_dir: Path, interface: str | None = 
     defsyms = [f"-Wl,--defsym={name}={value & ~1:#x}" for name, value in exports.items()]
     rv = compile_and_link(
         "rv32", rv_sources, out_dir / "main_rv32.elf",
-        [*C_FLAGS["rv32"], f"-I{FIRMWARE_DIR}", _linker_script("rv32.ld"), *defsyms], ["-lgcc"])
+        [*C_FLAGS["rv32"], f"-I{FIRMWARE_DIR}", *rv_flags, _linker_script("rv32.ld"), *defsyms],
+        [*map(str, rv_libs), "-lgcc"])
     if gen:  # the Thumb side was linked against the table's slots at IMPORT_BASE
         table = elf.load(rv).symbols.get("__thumbv_imports")
         if table != IMPORT_BASE:
             raise RuntimeError(f"import table at {table}, expected {IMPORT_BASE:#x}: check rv32.ld")
     return rv, thumb
+
+
+# --- CMSIS-DSP (Phase 5.4) ---------------------------------------------------------
+
+# The modules the library is built from: everything but the transforms (FFT,
+# whose tables are large) and the classifiers. Every function and table gets
+# its own section, so a link with --gc-sections keeps only what is used
+# (CMSIS-DSP's own way since v1.18).
+CMSIS_DSP_MODULES = ["BasicMathFunctions", "StatisticsFunctions", "FilteringFunctions",
+                     "MatrixFunctions", "FastMathFunctions", "ComplexMathFunctions",
+                     "SupportFunctions", "ControllerFunctions"]
+
+
+def rv_libc() -> list[Path]:
+    """picolibc's C library (with its maths) for rv32im/ilp32."""
+    lib = PICOLIBC / "lib" / "release" / "rv32im" / "ilp32" / "libc.a"
+    if not lib.exists():
+        raise ToolMissing("picolibc-riscv64-unknown-elf")
+    return [lib]
+
+
+def cmsis_dsp_flags(kind: str) -> list[str]:
+    """Compiler flags for code that includes arm_math.h. Thumb: CMSIS-DSP's
+    Cortex-M0 configuration, with CMSIS-Core. RISC-V: its generic C build
+    (__GNUC_PYTHON__, CMSIS-DSP's switch for builds without CMSIS-Core)."""
+    # ARM_MATH_MATRIX_CHECK: the matrix functions check sizes (a standard option).
+    flags = [f"-I{CMSIS_DSP / 'Include'}", f"-I{CMSIS_DSP / 'PrivateInclude'}", "-DARM_MATH_MATRIX_CHECK"]
+    if kind == "thumb":
+        return flags + [f"-I{CMSIS_CORE}"]
+    rv_libc()                           # its headers: string.h, math.h
+    return flags + ["-D__GNUC_PYTHON__", "-isystem", str(PICOLIBC / "include")]
+
+
+def cmsis_dsp_library(kind: str, out_dir: Path = REPO / "build" / "cmsis-dsp") -> Path:
+    """CMSIS-DSP as a static library, one object per function: `thumb` is
+    the Cortex-M0 build that mixed programs link as a binary, `rv32` the
+    same sources for RISC-V, the reference. Built once, into out_dir/kind."""
+    cc, arch = TOOLCHAINS[kind]
+    if shutil.which(cc) is None:
+        raise ToolMissing(cc)
+    out = out_dir / kind
+    archive = out / f"libcmsisdsp_{kind}.a"
+    stamp = out / "flags"
+    flags = [*arch, "-O2", "-ffreestanding", "-fno-builtin", "-ffunction-sections", "-fdata-sections",
+             *cmsis_dsp_flags(kind), "-c"]
+    if archive.exists() and stamp.exists() and stamp.read_text() == " ".join(flags):
+        return archive
+    out.mkdir(parents=True, exist_ok=True)
+    archive.unlink(missing_ok=True)
+    sources = [f for m in CMSIS_DSP_MODULES for f in sorted((CMSIS_DSP / "Source" / m).glob("arm_*.c"))
+               if not re.search(r"_(f16|f64)\b|_f16_|_f64_", f.stem)]
+    sources.append(CMSIS_DSP / "Source" / "CommonTables" / "arm_common_tables.c")
+    objects = []
+    procs = []
+    for src in sources:
+        obj = out / (src.stem + ".o")
+        objects.append(obj)
+        procs.append(subprocess.Popen([cc, *flags, str(src), "-o", str(obj)]))
+        if len(procs) >= 16:
+            for proc in procs:
+                if proc.wait():
+                    raise subprocess.CalledProcessError(proc.returncode, proc.args)
+            procs = []
+    for proc in procs:
+        if proc.wait():
+            raise subprocess.CalledProcessError(proc.returncode, proc.args)
+    ar = cc.replace("gcc", "ar")
+    subprocess.run([ar, "rcs", str(archive) + ".tmp", *map(str, objects)], check=True)
+    Path(str(archive) + ".tmp").rename(archive)
+    stamp.write_text(" ".join(flags))
+    return archive
 
 
 def coremark(out_dir: Path, iterations: int = 1) -> Path:

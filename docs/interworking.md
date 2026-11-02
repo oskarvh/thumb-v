@@ -18,11 +18,11 @@ The register mapping (D2) puts each ARM register in the RISC-V register with the
 
 The decoder is chosen by address (D7), so a call is just a jump. A RISC-V `jal` into a Thumb region starts decoding Thumb, and a Thumb `BX LR` back to a RISC-V address switches back. LR bit 0 doesn't matter (Q1).
 
-Flags are UNKNOWN after a call under AAPCS, and Thumb code never relies on them across one. RISC-V code may freely use t3–t6, which hold the flags while Thumb code runs.
+Flags are UNKNOWN after a call under AAPCS, and Thumb code never relies on them across one. Since Phase 4 they live in the hardware flags unit (NZCV), which RISC-V code never touches; t3–t6 are free for RISC-V code.
 
 ## Where the conventions differ
 
-Both are soft-float integer conventions with the same type sizes and struct layouts (natural alignment, little-endian), so memory is shared as-is. Only argument passing differs. Every case below was checked against GCC's code for both targets:
+Both are soft-float integer conventions with the same type sizes and struct layouts (natural alignment, little-endian), so memory is shared as-is, with one exception: **enums.** `arm-none-eabi` uses short enums (objects are tagged `Tag_ABI_enum_size: small`), so an enum whose values fit a byte is one byte on the Thumb side and four on RISC-V. As an argument or result that changes nothing, because both conventions extend small integers to a word. In a struct it changes the layout, so an interface declares an enum by its Thumb size. Apart from that, only argument passing differs. Every case below was checked against GCC's code for both targets:
 
 | Case | RISC-V ilp32 | AAPCS |
 |---|---|---|
@@ -46,6 +46,7 @@ Functions that cross the boundary are declared in an interface header, which is 
 #include "thumbv_interface.h"
 
 struct pair { int32_t a, b; };
+typedef int16_t q15_t;                                 /* scalar typedefs */
 
 THUMBV_THUMB struct pair t_make_pair(int a, int b);   /* implemented in Thumb, called from RISC-V */
 THUMBV_RISCV int rv_sum(const int32_t *p, int n);     /* implemented in RISC-V, called from Thumb */
@@ -55,6 +56,7 @@ Both sides include the same header, so their prototypes agree. Supported:
 - Integer and pointer types: `char` to `long long`, the `<stdint.h>` types, `size_t`, `float` and `double` (soft-float, passed like integers of the same size).
 - Pointers of any kind, including function pointers and array parameters.
 - Structs of these (nested, arrays), by value and as results.
+- Typedefs of these (`typedef int16_t q15_t;`). Enums by their Thumb size (see above): `typedef int8_t arm_status;`.
 
 Rejected with an error: variadic functions, unions, bit-fields, unknown types.
 
@@ -90,6 +92,8 @@ uv run python -m thumbv.interwork tests/c/abi.h
 3. **Load both images.** The Thumb library's code range becomes a Thumb region; everything else decodes as RISC-V.
 
 Neither link needs anything from the other except: the Thumb link needs `IMPORT_BASE` and the order of the imports (both come from the header), and the RISC-V link needs the Thumb export addresses (from step 1). So there is no circular dependency.
+
+**A library linked as a binary** (`mixed_program(..., thumb_libs=[...])`, Phase 5.4): a static library for the Thumb side, such as a vendor's Cortex-M0 build. The header's exports are kept with `--undefined`, everything else the library doesn't need is dropped with `--gc-sections`, and the Thumb side gets newlib for the library's own C library calls. `rv_libs`, `thumb_flags` and `rv_flags` pass the rest (include paths, the RISC-V side's C library). See [A prebuilt library](#a-prebuilt-library-cmsis-dsp) below.
 
 Without an interface header, `mixed_program` falls back to the simple flow of Phase 0.4: every global Thumb function is exported, there are no imports and no thunks, and all signatures must be compatible.
 
@@ -155,6 +159,17 @@ A function pointer passed across the boundary (a callback) is called directly, w
 - **Three-way check** (`test_abi_program_three_ways`): the ABI test program has 14 Thumb functions called from RISC-V and 7 RISC-V functions called from Thumb, 16 of which need thunks. It is built mixed (with thunks), all-RISC-V and all-Thumb, and all three must return the same result. The all-RISC-V and all-Thumb builds each use only one convention, so this checks both layout algorithms and every thunk against the compilers.
 - **Lockstep** (`test_abi_program_lockstep`): the mixed build also runs in program lockstep, with Thumb code checked against Unicorn instruction by instruction.
 - **Mutant** (`test_wrong_layout_is_caught`): dropping AAPCS's even-register rule for 8-byte-aligned arguments makes the mixed result differ, showing the three-way check catches a wrong layout.
+
+## A prebuilt library: CMSIS-DSP
+
+Phase 5.4 applies the flow to a library Thumb-V doesn't control: Arm's CMSIS-DSP (`third_party/CMSIS-DSP`, v1.18.0).
+- **The binary:** `build.cmsis_dsp_library("thumb")` builds it the official way for a Cortex-M0, with CMSIS-Core (`third_party/CMSIS_6`) and `-mcpu=cortex-m0`. It's a static library, one section per function and table, of everything but the transforms and classifiers. Mixed programs only ever see that archive and the library's headers.
+- **The interface:** `tests/c/cmsis_dsp.h` restates 16 of its prototypes, from filters and matrices to sine, square root and statistics. Three of them take five arguments, so the generator makes thunks for those: the fifth goes on the stack under AAPCS.
+- **The reference:** the same sources built for RISC-V (`cmsis_dsp_library("rv32")`, CMSIS-DSP's generic C build), with picolibc as the RISC-V C library.
+- **The test:** `test_cmsis_dsp` runs `tests/c/dsp_main.c`, a RISC-V program that uses the real `arm_math.h`.
+  - It's built against both libraries and runs on the RTL. The mixed build runs in lockstep with the model, and the two print exactly the same.
+  - A few results are checked against their definitions: `sqrt(0.25)`, sine within 1e-5, and the negative `arm_status` values.
+  - `make board PROGRAM=dsp` prints the same on the CYC1000. The library's code there is 8.9 KB.
 
 ## Limitations
 

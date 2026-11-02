@@ -5,7 +5,7 @@ Instructions for Ubuntu 24.04. Run `make check-tools` to see what is installed. 
 ## Phase 0: model and test programs
 
 ```sh
-sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi gcc-riscv64-unknown-elf
+sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf
 curl -LsSf https://astral.sh/uv/install.sh | sh   # if uv is missing
 make setup        # also fetches the CoreMark and Embench submodules
 make test

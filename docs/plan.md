@@ -534,9 +534,15 @@ Goal: interrupts and traps work across both instruction sets through one control
      - **Latency:** 80 cycles from SysTick pending to the C handler's first load, against the Cortex-M0's 16 to its first instruction.
      - **On the board:** `make board PROGRAM=tick`, a Thumb SysTick handler at 10 Hz counting on the LEDs, with RISC-V printing each tick. Simulated too, for its first two ticks.
      - **A layout fix it needed:** on the board's 16 KiB data RAM, the Thumb library's data and the RISC-V side's started on the same byte, so only one side could have data. With the firmware every mixed program has RISC-V data, so the RISC-V side now starts at `0x2000_2000`, and the Thumb library has 8 KiB.
-4. **A prebuilt Cortex-M0 library from RISC-V.**
+4. **A prebuilt Cortex-M0 library from RISC-V.** (done)
    - **The library:** built separately as a Cortex-M0 static library and used only as a binary with its header, through the Phase 0 thunk generator and build flow ([interworking.md](interworking.md)). Candidate: CMSIS-DSP (Apache-2.0), chosen at the start of the step.
    - **Checked:** its results against the same functions compiled for RISC-V, in lockstep on the RTL and on the board.
+   - **Done** ([interworking.md](interworking.md#a-prebuilt-library-cmsis-dsp)):
+     - **The library:** CMSIS-DSP v1.18.0 (with CMSIS_6 v6.4.0 for CMSIS-Core), built for Cortex-M0 as a static library and linked as a binary. `mixed_program` gained `thumb_libs`, with exports kept and unused sections dropped.
+     - **The interface:** 16 functions; the generator makes thunks for the three with five arguments. The parser gained scalar typedefs.
+     - **What it found:** `arm-none-eabi` uses 1-byte enums, while RISC-V's are 4 bytes. That's harmless for arguments and results but not in structs, so interfaces declare enums by their Thumb size, and the interworking doc's "same type sizes" now has that exception. The test checks the negative `arm_status` values cross correctly sign-extended.
+     - **The test:** `test_cmsis_dsp`, in lockstep on the RTL, prints exactly what the all-RISC-V build prints, with a few values checked against their definitions. On the board, `make board PROGRAM=dsp` prints the same.
+     - **New host dependency:** picolibc for the RISC-V side, which had no C library (CI installs it too).
 5. **An RTOS with a Thumb task.**
    - **The RTOS:** FreeRTOS (MIT), RISC-V port, ticked by SysTick through the controller.
    - **The context switch** also saves NZCV, so a Thumb task can be preempted between a compare and its branch.
@@ -590,6 +596,6 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board). Phase 3 is done: 3.1–3.3 (the sequencer and every multi-op expansion), 3.4 (interrupts at Thumb boundaries), 3.5 (calls in both directions, in simulation and on the board). Phase 4: 4.1 (strategy C in the model), 4.2 (the flags unit and flag writers in the RTL), 4.3 (the flag readers: the RTL is now all of strategy C), 4.4 (gcc code with loops, CoreMark and Embench on the RTL; loops on the board). Phase 5: 5.1 (the model takes traps; the RTL lockstep follows the core into them), 5.2 (the interrupt controller and SysTick in the RTL), 5.3 (the firmware's entry routine: handlers of both instruction sets, SVC, faults; a Thumb SysTick handler on the board).
+Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board). Phase 3 is done: 3.1–3.3 (the sequencer and every multi-op expansion), 3.4 (interrupts at Thumb boundaries), 3.5 (calls in both directions, in simulation and on the board). Phase 4: 4.1 (strategy C in the model), 4.2 (the flags unit and flag writers in the RTL), 4.3 (the flag readers: the RTL is now all of strategy C), 4.4 (gcc code with loops, CoreMark and Embench on the RTL; loops on the board). Phase 5: 5.1 (the model takes traps; the RTL lockstep follows the core into them), 5.2 (the interrupt controller and SysTick in the RTL), 5.3 (the firmware's entry routine: handlers of both instruction sets, SVC, faults; a Thumb SysTick handler on the board), 5.4 (CMSIS-DSP's Cortex-M0 build called from RISC-V, in simulation and on the board).
 
-1. Phase 5, step 4: a prebuilt Cortex-M0 library called from RISC-V (choose the library first: CMSIS-DSP is the candidate).
+1. Phase 5, step 5: FreeRTOS with a Thumb task beside RISC-V tasks.

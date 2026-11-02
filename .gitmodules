@@ -7,3 +7,9 @@
 [submodule "third_party/VexRiscv"]
 	path = third_party/VexRiscv
 	url = https://github.com/SpinalHDL/VexRiscv.git
+[submodule "third_party/CMSIS-DSP"]
+	path = third_party/CMSIS-DSP
+	url = https://github.com/ARM-software/CMSIS-DSP.git
+[submodule "third_party/CMSIS_6"]
+	path = third_party/CMSIS_6
+	url = https://github.com/ARM-software/CMSIS_6.git
