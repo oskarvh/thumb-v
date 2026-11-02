@@ -75,6 +75,8 @@ class Machine:
         self.x = [0] * 32
         self.pc = 0
         self.mstatus = r.MSTATUS_MPP
+        self.nzcv = 0            # the flags unit (strategy C): N=8, Z=4, C=2, V=1
+        self._result = 0         # the last ALU result, even with rd = x0 (for the flags unit)
         self.mem = Memory()
         self.thumb_regions = list(thumb_regions)  # [(base, limit)): fixed regions, set by the loader
         self.region_csrs = [0] * (2 * r.THUMB_REGIONS)   # the hardware's region CSRs, see rv32.py
@@ -113,14 +115,81 @@ class Machine:
             target = self.execute(self.mem.read(pc, 4), pc, link=pc + 4)
             self.pc = target if target is not None else (pc + 4) & MASK
 
-    # --- RV32IM ------------------------------------------------------------------
+    # --- Execution ------------------------------------------------------------------
 
     def _set(self, rd, value):
+        self._result = value & MASK
         if rd:
             self.x[rd] = value & MASK
 
     def execute(self, w: int, pc: int, link: int) -> int | None:
-        """Execute one RV32 instruction at `pc`. Returns the target if control transfers."""
+        """Execute one RV32 op at `pc`, with its flags side-band if it has one.
+        Returns the target if control transfers."""
+        kind = r.kind(w)
+        if kind:
+            return self._execute_flagged(r.word(w), kind, r.cond(w), pc)
+        return self._execute(w, pc, link)
+
+    # --- Flags unit (strategy C) ---------------------------------------------------
+
+    def _execute_flagged(self, w, kind, cond, pc):
+        """An op with a flags kind, as the hardware's flags unit executes it."""
+        x = self.x
+        opcode, rd, f3 = w & 0x7F, (w >> 7) & 0x1F, (w >> 12) & 7
+        rs1, rs2, f7 = (w >> 15) & 0x1F, (w >> 20) & 0x1F, w >> 25
+        a = x[rs1]
+        if kind == r.BRANCH:
+            if w & 0x01FFF07F != 0x63:           # beq x0, x0, off
+                raise ValueError(f"BRANCH on {w:#010x}")
+            target = self._execute(w, pc, pc)    # always taken; the condition decides
+            return target if self.condition(cond) else None
+        if kind in (r.ADD, r.SUB, r.ADC, r.SBC):
+            reg = opcode == 0x33 and f3 == 0 and f7 == (0x20 if kind in (r.SUB, r.SBC) else 0)
+            if not (reg or (opcode == 0x13 and f3 == 0)):
+                raise ValueError(f"kind {kind} on {w:#010x}")
+            b = x[rs2] if reg else _sext(w >> 20, 12) & MASK
+            sub = kind in (r.SUB, r.SBC)
+            cin = (self.nzcv >> 1 & 1) if kind in (r.ADC, r.SBC) else int(sub)
+            b = ~b & MASK if sub else b
+            full = a + b + cin
+            res = full & MASK
+            self.retired_ops += 1
+            self._set(rd, res)
+            v = ((a ^ res) & (b ^ res)) >> 31
+            self.nzcv = self._nz(res) | (full >> 32) << 1 | v
+            return None
+        if self._execute(w, pc, pc) is not None:
+            raise ValueError(f"kind {kind} on a jump {w:#010x}")
+        res = self._result
+        c = self.nzcv & 2
+        if kind == r.CW:
+            if res & 2:
+                self.nzcv = self.nzcv & ~2 | (res & 1) << 1
+            return None
+        if kind in (r.SHL, r.SHR):
+            if opcode != 0x13 or f3 not in (1, 5):
+                raise ValueError(f"kind {kind} on {w:#010x}")
+            bit = (-rs2) % 32 if kind == r.SHL else (rs2 - 1) % 32
+            c = (a >> bit & 1) << 1
+        elif kind != r.NZ:
+            raise ValueError(f"unknown kind {kind}")
+        self.nzcv = self._nz(res) | c | (self.nzcv & 1)
+        return None
+
+    @staticmethod
+    def _nz(res):
+        return (res >> 31) << 3 | (res == 0) << 2
+
+    def condition(self, cond):
+        """ARM condition `cond` (0-13) on NZCV."""
+        n, z, c, v = (self.nzcv >> 3) & 1, (self.nzcv >> 2) & 1, (self.nzcv >> 1) & 1, self.nzcv & 1
+        return [z, not z, c, not c, n, not n, v, not v,
+                c and not z, not c or z, n == v, n != v,
+                not z and n == v, z or n != v][cond]
+
+    # --- RV32IM ----------------------------------------------------------------------
+
+    def _execute(self, w: int, pc: int, link: int) -> int | None:
         self.retired_ops += 1
         x = self.x
         opcode, rd, f3 = w & 0x7F, (w >> 7) & 0x1F, (w >> 12) & 7
@@ -239,9 +308,12 @@ class Machine:
             return None
         csr = w >> 20
         regions = range(r.THUMB_REGION0, r.THUMB_REGION0 + 2 * r.THUMB_REGIONS)
-        if f3 in (1, 2, 3, 5, 6, 7) and (csr == r.MSTATUS or csr in regions or csr in self.trap_csrs):
+        if f3 in (1, 2, 3, 5, 6, 7) and (csr in (r.MSTATUS, r.NZCV) or csr in regions
+                                         or csr in self.trap_csrs):
             if csr == r.MSTATUS:
                 old = self.mstatus
+            elif csr == r.NZCV:
+                old = self.nzcv << 28
             elif csr in self.trap_csrs:
                 old = self.trap_csrs[csr]
             else:
@@ -257,6 +329,8 @@ class Machine:
             if f3 & 3 == 1 or rs1:
                 if csr == r.MSTATUS:
                     self.mstatus = (new & MASK) | r.MSTATUS_MPP
+                elif csr == r.NZCV:
+                    self.nzcv = (new & MASK) >> 28
                 elif csr in self.trap_csrs:
                     self.trap_csrs[csr] = new & MASK
                 else:

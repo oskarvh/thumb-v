@@ -158,8 +158,9 @@ def make_case(rng, name):
                 ram_words=ram_words)
 
 
-def run_model(case, code, ram):
-    m = Machine(thumb_regions=[(CODE_BASE, CODE_BASE + CODE_SIZE)], options=Options(exact_lr=True))
+def run_model(case, code, ram, flags="A"):
+    m = Machine(thumb_regions=[(CODE_BASE, CODE_BASE + CODE_SIZE)],
+                options=Options(exact_lr=True, flags=flags))
     m.mem.map(CODE_BASE, CODE_SIZE)
     m.mem.map(RAM_BASE, RAM_SIZE)
     m.mem.write_bytes(CODE_BASE, bytes(code))
@@ -167,7 +168,10 @@ def run_model(case, code, ram):
     for i, value in enumerate(case.regs):
         m.x[regmap.rv(i)] = value
     f = case.flags
-    m.x[regmap.FN], m.x[regmap.FZ], m.x[regmap.FC], m.x[regmap.FV] = f >> 3, f >> 2 & 1, f >> 1 & 1, f & 1
+    if flags == "C":
+        m.nzcv = f
+    else:
+        m.x[regmap.FN], m.x[regmap.FZ], m.x[regmap.FC], m.x[regmap.FV] = f >> 3, f >> 2 & 1, f >> 1 & 1, f & 1
     m.mstatus = 0 if case.primask else 8
     m.pc = case.pc
     m.step()
@@ -228,7 +232,7 @@ def park_at(code, ram, addr, case):
         ram[addr - RAM_BASE:addr - RAM_BASE + 2] = PARK
 
 
-def run_case(uc, rng, case):
+def run_case(uc, rng, case, flags="A"):
     code = bytearray(rng.randbytes(CODE_SIZE))
     ram = bytearray(rng.randbytes(RAM_SIZE))
     for addr, word in case.ram_words.items():
@@ -238,8 +242,8 @@ def run_case(uc, rng, case):
 
     try:
         # Unicorn decodes the instruction it stops at, so make that a valid one.
-        park_at(code, ram, run_model(case, code, ram).pc, case)
-        m = run_model(case, code, ram)
+        park_at(code, ram, run_model(case, code, ram, flags).pc, case)
+        m = run_model(case, code, ram, flags)
     except Trap as trap:
         return [f"model trap: {trap}"]
     error = uc.run(case, code, ram)
@@ -251,7 +255,8 @@ def run_case(uc, rng, case):
         if want != got:
             problems.append(f"r{i}: unicorn {want:#010x}, model {got:#010x}")
     want_flags = u.reg_read(A.UC_ARM_REG_XPSR) >> 28
-    got_flags = m.x[regmap.FN] << 3 | m.x[regmap.FZ] << 2 | m.x[regmap.FC] << 1 | m.x[regmap.FV]
+    got_flags = (m.nzcv if flags == "C" else
+                 m.x[regmap.FN] << 3 | m.x[regmap.FZ] << 2 | m.x[regmap.FC] << 1 | m.x[regmap.FV])
     if want_flags != got_flags:
         problems.append(f"NZCV: unicorn {want_flags:04b}, model {got_flags:04b}")
     want_pc, got_pc = u.reg_read(A.UC_ARM_REG_PC) & ~1, m.pc & ~1
@@ -265,15 +270,17 @@ def run_case(uc, rng, case):
     return problems
 
 
+@pytest.mark.parametrize("flags", ["A", "C"])
 @pytest.mark.parametrize("name", [e.name for e in isa.ENCODINGS if e.name not in NOT_LOCKSTEPPED])
-def test_lockstep(uc, name):
+def test_lockstep(uc, name, flags):
+    """Strategy A, and strategy C (the hardware flags unit, Phase 4)."""
     rng = random.Random(f"lockstep-{name}")
     done = 0
     while done < CASES:
         case = make_case(rng, name)
         if case is None:
             continue
-        problems = run_case(uc, rng, case)
+        problems = run_case(uc, rng, case, flags)
         if problems:
             pytest.fail(case.describe() + ":\n  " + "\n  ".join(problems))
         done += 1

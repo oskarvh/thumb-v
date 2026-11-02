@@ -142,7 +142,7 @@ The other `1011` encodings are ARMv7-M instructions (`CBZ`/`CBNZ`, `IT`) or unal
 
 | Encoding | Instruction | Flags | RV32 expansion | Ops | Notes | Status |
 |---|---|---|---|---|---|---|
-| `1101 cccc iiiiiiii` (cccc ≠ 111x) | `B<cond> label` | R: per condition | strategy A: `bne`/`beq`/`bltu`/`bgeu` on the flag registers | 1–3 | Target PC + 4 + imm8·2, within RISC-V's ±4 KiB branch range. See [Flag computation](#flag-computation) | modelled |
+| `1101 cccc iiiiiiii` (cccc ≠ 111x) | `B<cond> label` | R: per condition | strategy A: `bne`/`beq`/`bltu`/`bgeu` on the flag registers; strategy C: one `beq x0, x0` with the condition | 1–3 | Target PC + 4 + imm8·2, within RISC-V's ±4 KiB branch range. See [Flag computation](#flag-computation) | modelled |
 | `11011110 iiiiiiii` | `UDF #imm8` | — | an illegal RV32 encoding (e.g. `0x00000000`) | 1 | Illegal-instruction trap | modelled |
 | `11011111 iiiiiiii` | `SVC #imm8` | — | `ecall` | 1 | The handler reads imm8 from the instruction at `mepc` and resumes at `mepc`+2 | modelled |
 | `11100 iiiiiiiiiii` | `B label` | — | `jal x0, off` | 1 | Target PC + 4 + imm11·2 (±2 KiB) | modelled |
@@ -210,6 +210,34 @@ Conditional branches:
 | HI, LS | 1 | `bltu Z, C` / `bgeu Z, C` (C = 1 and Z = 0 is the only case with Z < C) |
 | GE, LT | 1 | `beq N, V` / `bne N, V` |
 | GT, LE | 3 | `xor t, N, V; or t, t, Z; beq`/`bne t, x0` |
+
+### Strategy C: the hardware flags unit
+
+`Options(flags="C")`, the hardware's mode from Phase 4 (D1). An op can carry a flags kind and a condition beside its RV32 word (in the model, bits 35:32 and 39:36 of the op; see `rv32.flagged`). The flags unit does the rest in execute:
+
+| Kind | On | Effect |
+|---|---|---|
+| `nz` | any ALU op | N, Z from the result |
+| `add`, `sub` | `add`, `sub`, `addi` | `rd = rs1 ± src2`, NZCV from the adder. `sub` makes `addi` subtract |
+| `adc`, `sbc` | `add`, `sub` | the same, with C as the carry-in |
+| `shl`, `shr` | `slli`, `srli`, `srai` | N, Z from the result; C = `rs1[-shamt mod 32]` / `rs1[(shamt − 1) mod 32]` |
+| `cw` | any ALU op | C = result bit 0 if result bit 1 is set |
+| `branch` | `beq x0, x0, off` | taken if the ARM condition holds |
+
+| Instruction | Ops | Expansion |
+|---|---|---|
+| `ADDS`, `SUBS`, `CMP`, `CMN`, `RSBS`, `ADCS`, `SBCS` | 1 | `add`/`sub`/`addi` with `add`, `sub`, `adc` or `sbc`; compares write `x0` |
+| `MOVS`, `ANDS`, `EORS`, `ORRS`, `MVNS`, `TST` | 1 | the result op with `nz` (`TST` writes `x0`) |
+| `LSLS`/`LSRS`/`ASRS` by an immediate | 1 | `slli`/`srli`/`srai` with `shl`/`shr` |
+| `LSRS`/`ASRS` by 32 | 2 | `srli t, rm, 0` with `shr` (C = rm[31]), then the result with `nz` |
+| `MULS`, `BICS` | 2 | the result, then `mv rd, rd` with `nz` (`MULS`: the product only exists in writeback) / `xori` then `and` with `nz` |
+| `CMP` with a high register | 1–3 | reads of the PC, then `sub x0` with `sub` |
+| `LSLS`/`LSRS`/`ASRS` by a register | 12 / 12 / 14 | the C candidate in software, then `sltu t, x0, amount; slli t, t, 1; or c, c, t` with `cw` (C unchanged for an amount of 0), then the 5-op result, its last op with `nz` |
+| `RORS` | 10 | the result with `nz`, then C from its bit 31 with `cw` |
+| `B<cond>` | 1 | `beq x0, x0, off` with `branch` and the condition |
+| `MRS`/`MSR APSR` | 1 | `csrrs rd, 0x7C4, x0` / `csrrw x0, 0x7C4, rn`: NZCV in bits 31:28 |
+
+`tests/test_flags_c.py` checks every 16-bit instruction against strategy A, flags included, and `tests/test_lockstep_single.py` checks every encoding against Unicorn in both modes.
 
 ## Register shifts
 

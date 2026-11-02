@@ -16,7 +16,8 @@ strategies are then costed from this trace:
   B          lazy flags: save the operands, compute a flag when it is read.
              Optimistic: the read knows the producer's kind for free, where real
              hardware would need branch-free code for every kind.
-  C          hardware NZCV: ALU ops latch the flags, B<cond> is one custom op.
+  C          hardware NZCV: the expander's strategy C (Options(flags="C")),
+             costed from its real expansions.
   C fused    C, plus CMP + B<cond> as one compare-and-branch that also latches
              the flags (no liveness needed).
   C shift    C fused, plus an ARM-shift micro-op for register shifts (Q3).
@@ -100,7 +101,7 @@ class Static:
     flag_ops: dict = field(default_factory=dict)
     result: int = 0         # ops for the result alone
     move: int = 0           # final move from a temporary, needed only if C or V is computed
-    c_ops: int = 0          # cost under strategy C
+    c_ops: int = 0          # cost under strategy C: its real expansion's length
     record: int = 0         # strategy B: ops to save operands and kind
     call_or_return: bool = False
     writes_pc: bool = False     # ADD/MOV pc: a computed jump
@@ -113,12 +114,15 @@ class Static:
                 + sum(ops for f, ops in self.flag_ops.items() if live & f))
 
 
+_STRATEGY_C = Options(flags="C")
+
+
 def analyse(pc, hw1, hw2) -> Static:
     exp = expand(hw1, hw2, pc)
     name = exp.name
     fields = isa.decode(hw1, hw2)[1] if name != "UNDEFINED" else {}
     s = Static(pc, name, fields, exp.length, len(exp.ops))
-    s.c_ops = s.a_ops
+    s.c_ops = len(expand(hw1, hw2, pc, _STRATEGY_C).ops)
     if name in FLAG_OPS or name in SHIFT_REG:
         s.writes = N | Z | C | V if name in ADD_LIKE | SUB_LIKE | CARRY_IN else (
             N | Z | C if name in SHIFT_IMM | SHIFT_REG else N | Z)
@@ -129,7 +133,6 @@ def analyse(pc, hw1, hw2) -> Static:
             # including the move of the result out of its temporary.
             s.result = SHIFT_REG_RESULT
             s.flag_ops = {N: 1, Z: 1, C: s.a_ops - SHIFT_REG_RESULT - 2}
-            s.c_ops = s.a_ops - 2          # NZ from the unit, C still in software
             s.record = 4                   # result, value, amount, kind
         else:
             s.flag_ops = FLAG_OPS[name]
@@ -137,18 +140,16 @@ def analyse(pc, hw1, hw2) -> Static:
             # The breakdown must account for exactly the ops the expander emits.
             pc_reads = 2 * sum(reg == 15 for reg in _hi_operands(name, fields))
             assert s.result == RESULT_OPS.get(name, 1) + pc_reads, (name, exp.ops)
-            s.c_ops = 1 if name in CARRY_IN else s.result
             # Save the operands and the kind; the result too unless it goes there directly.
             s.record = SAVED[name] + (0 if name in COMPARES else 1) + 1
     if name in CARRY_IN:
         s.reads = C
     elif name == "B_cond":
         s.reads = COND_READS[fields["c"]]
-        s.c_ops = 1
     elif name == "MRS" and fields["s"] == APSR:
-        s.reads, s.c_ops = ALL, 1
+        s.reads = ALL
     elif name == "MSR" and fields["s"] == APSR:
-        s.writes, s.c_ops = ALL, 1
+        s.writes = ALL
         s.flag_ops, s.result, s.record = {N: 1, Z: 2, C: 2, V: 2}, 0, 1
     s.call_or_return = name in ("BL", "BLX", "BX") or (name == "POP" and fields["P"])
     s.writes_pc = name in ("ADD_hi", "MOV_hi") and (fields["D"] << 3 | fields["d"]) == 15

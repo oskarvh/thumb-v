@@ -6,17 +6,19 @@ from thumbv import elf, expander, lockstep
 from thumbv import rv32 as r
 
 
-def test_thumb_selftest(build_c):
+@pytest.mark.parametrize("flags", ["A", "C"])
+def test_thumb_selftest(build_c, flags):
     image = elf.load(build_c("thumb", "thumb_selftest.c"))
-    result = lockstep.run([image], stop=image.symbols["done"])
+    result = lockstep.run([image], stop=image.symbols["done"], flags=flags)
     assert result.ok, f"{result.stopped}\n{result.divergence}"
     assert result.thumb_steps > 1000
 
 
-def test_mixed_program(build_mixed):
+@pytest.mark.parametrize("flags", ["A", "C"])
+def test_mixed_program(build_mixed, flags):
     rv_elf, thumb_elf = build_mixed(["mixed_lib.c"], ["mixed_main.c"])
     rv_img, thumb_img = elf.load(rv_elf), elf.load(thumb_elf)
-    result = lockstep.run([rv_img, thumb_img], stop=rv_img.symbols["done"])
+    result = lockstep.run([rv_img, thumb_img], stop=rv_img.symbols["done"], flags=flags)
     assert result.ok, f"{result.stopped}\n{result.divergence}"
     assert 0 < result.thumb_steps < result.steps   # both instruction sets ran
 
@@ -42,11 +44,12 @@ def test_divergence_is_reported(build_c, monkeypatch):
     assert any(p.startswith("r") for p in result.divergence.problems)
 
 
-def test_interworking(build_mixed):
+@pytest.mark.parametrize("flags", ["A", "C"])
+def test_interworking(build_mixed, flags):
     """RISC-V <-> Thumb calls with every ABI-compatible kind of signature."""
     rv_elf, thumb_elf = build_mixed(["interwork_lib.c"], ["interwork_main.c"])
     rv_img, thumb_img = elf.load(rv_elf), elf.load(thumb_elf)
-    result = lockstep.run([rv_img, thumb_img], stop=rv_img.symbols["done"])
+    result = lockstep.run([rv_img, thumb_img], stop=rv_img.symbols["done"], flags=flags)
     assert result.ok, f"{result.stopped}\n{result.divergence}"
     assert 0 < result.thumb_steps < result.steps
 
