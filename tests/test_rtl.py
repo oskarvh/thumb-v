@@ -325,7 +325,7 @@ def test_gcc_loops(rtl_simulator, build_mixed, build_c, tmp_path):
     names = {name for (pc, name), n in thumb_instructions_run(images, result).items()}
     assert names >= {"B_cond", "CMP_imm", "CMP_reg", "ADCS", "TST", "MULS"}, names
     assert f"checksum           = {result.a0:08x}" in result.uart
-    native = elf.load(build_c("rv32", "irq_loops_main.c", "loops_run.c", "loops.c", "irq_handler.S"))
+    native = elf.load(build_c("rv32", "loops_check_main.c", "loops_run.c", "loops.c"))
     reference = lockstep.simulate([native], stop=native.symbols["done"])
     assert reference.stopped == "stop address"
     assert reference.final_regs[0] == 2 * result.a0 & 0xFFFF_FFFF    # it runs them twice
@@ -442,6 +442,26 @@ def test_synchronous_traps(rtl_simulator, build_mixed, tmp_path):
     assert records[7][1] == fn("t_store") and records[7][2] & 3 == 2
     assert not thumb_region(images, records[8][1]) and records[8][2] == rv32.ecall()
     assert words("results", 4) == [0, records[4][2], records[5][2] - 2, 0x3000_0000]
+
+
+def test_interrupt_controller(rtl_simulator, build_c, tmp_path):
+    """Phase 5.2: the controller from software on the SoC: a pended
+    interrupt (priority 1), PendSV (3) and SysTick (0), claimed in priority
+    order, in lockstep with the model (which takes the controller's values
+    from the trace)."""
+    path = build_c("rv32", "nvic_main.c", "trap_handler.S")
+    images = [elf.load(path)]
+    result = run(images, tmp_path)
+    assert result.status == "EXIT"
+    divergence, model = rtlsim.replay(images, result)
+    assert divergence is None, str(divergence)
+    words = lambda name, n: [int.from_bytes(model.mem.read_bytes(images[0].symbols[name] + 4 * k, 4), "little")
+                             for k in range(n)]
+    n = words("nclaimed", 1)[0]
+    # Interrupt 3 (exception 19) first, then PendSV (14), by priority; then
+    # five SysTicks (15), the first some 300 cycles after SysTick starts.
+    assert words("claimed", n) == [19, 14, 15, 15, 15, 15, 15]
+    assert words("active_seen", n) == words("claimed", n)       # VECTACTIVE while active
 
 
 def thumb_region(images, addr):

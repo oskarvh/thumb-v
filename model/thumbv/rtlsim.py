@@ -35,6 +35,10 @@ SOURCES = [CORE, *sorted((REPO / "rtl" / "soc").glob("*.v")), REPO / "sim" / "tb
 CODE_REGION = (0x0000_0000, 0x4_0000)
 DATA_REGION = (0x2000_0000, 0x1_0000)
 IO_BASE, IO_SIZE = 0x1000_0000, 16
+# Devices, whose loads the model takes from the RTL's trace: the I/O
+# registers, the interrupt controller's CLAIM/COMPLETE and the System
+# Control Space (base, size in bytes).
+DEVICES = [(IO_BASE, IO_SIZE), (0x1000_1000, 8), (0xE000_E000, 0x1000)]
 
 
 @dataclass(frozen=True)
@@ -102,6 +106,34 @@ def expand_rtl(queries, out_dir: Path) -> list[tuple[int, bool]]:
     subprocess.run([str(sim), f"+in={inputs}", f"+out={outputs}"], check=True, capture_output=True)
     words = outputs.read_text().split()
     return [(int(op, 16), last == "1") for op, last in zip(words[::2], words[1::2])]
+
+
+NVIC_SOURCES = [REPO / "rtl" / "soc" / "thumbv_nvic.v", REPO / "sim" / "nvic_tb.sv"]
+
+
+def nvic_simulator() -> Path:
+    """The testbench for the interrupt controller alone (sim/nvic_tb.sv), built if out of date."""
+    if shutil.which("verilator") is None:
+        raise ToolMissing("verilator")
+    build_dir = SIM_DIR / "nvic"
+    binary = build_dir / "obj_dir" / "nvic_tb"
+    if not binary.exists() or binary.stat().st_mtime < max(s.stat().st_mtime for s in NVIC_SOURCES):
+        build_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["verilator", "--binary", "--timing", "-j", "0", "--top-module", "nvic_tb",
+                        "-o", "nvic_tb", *map(str, NVIC_SOURCES)],
+                       cwd=build_dir, check=True, capture_output=True)
+    return binary
+
+
+def run_nvic(cycles, out_dir: Path) -> list[tuple[int, bool]]:
+    """The controller's (read data, irq) after each cycle of `cycles`:
+    [(op, addr, data, lines)], op 0 none, 1 read, 2 write."""
+    sim = nvic_simulator()
+    inputs, outputs = out_dir / "nvic_in.txt", out_dir / "nvic_out.txt"
+    inputs.write_text("".join(f"{op:x} {a:x} {d:x} {l:x}\n" for op, a, d, l in cycles))
+    subprocess.run([str(sim), f"+in={inputs}", f"+out={outputs}"], check=True, capture_output=True)
+    words = outputs.read_text().split()
+    return [(int(v, 16), irq == "1") for v, irq in zip(words[::2], words[1::2])]
 
 
 def memory_images(images, out_dir: Path, memories: Memories = SIM, suffix: str = ".hex") -> tuple[Path, Path]:
@@ -226,17 +258,18 @@ def thumb_boot(thumb: elf.Image) -> elf.Image:
     return elf.Image("EM_RISCV", RESET_VECTOR, [elf.Segment(RESET_VECTOR, code, True)], {}, {})
 
 
-# The interrupt the testbench raises (sim/tb.sv +irq): the core's timer input.
-TIMER_INTERRUPT = 7
+# The interrupt the core takes: the machine external interrupt, which the
+# interrupt controller drives (rtl/soc/thumbv_nvic.v, Phase 5.2).
+EXTERNAL_INTERRUPT = 11
 
 
 def lockstep(images, result: Result, options: Options = HARDWARE,
-             interrupt: int = TIMER_INTERRUPT) -> Divergence | None:
+             interrupt: int = EXTERNAL_INTERRUPT) -> Divergence | None:
     """Replay the RTL's retire trace against the model; the first difference, if any."""
     return replay(images, result, options, interrupt)[0]
 
 
-def replay(images, result: Result, options: Options = HARDWARE, interrupt: int = TIMER_INTERRUPT):
+def replay(images, result: Result, options: Options = HARDWARE, interrupt: int = EXTERNAL_INTERRUPT):
     """lockstep(), and the model it ran: (divergence or None, Machine). Without
     a divergence, the model's state is the RTL's, memory included, so a test
     can read a program's results from it.
@@ -253,7 +286,8 @@ def replay(images, result: Result, options: Options = HARDWARE, interrupt: int =
     """
     layout = Layout.for_images(images)
     m = _load_model(images, layout, options)
-    m.mem.map(IO_BASE, PAGE)
+    for base, size in DEVICES:
+        m.mem.map(base & ~(PAGE - 1), PAGE)
     m.pc = images[0].entry & ~1
     trace, i = result.trace, 0
     while i < len(trace):
@@ -287,7 +321,7 @@ def replay(images, result: Result, options: Options = HARDWARE, interrupt: int =
                 problems.append(f"instruction: model {insn:#0{2 + 2 * n}x}, RTL {r.insn:#010x}")
             if problems:
                 return (Divergence(i, r.pc, describe(m, layout, r.pc), problems), m)
-            if r.rmask and IO_BASE <= r.mem_addr < IO_BASE + IO_SIZE:
+            if r.rmask and any(base <= r.mem_addr < base + size for base, size in DEVICES):
                 m.mem.write(r.mem_addr, 4, r.rdata)   # what the device returned
             before = list(m.x)
             m.mem.log = []

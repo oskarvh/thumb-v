@@ -7,7 +7,10 @@
 //   0x1000_0000  UART data   (write: send a byte)
 //   0x1000_0004  UART status (bit 0: busy)
 //   0x1000_0008  LEDs        (bits 7:0, read/write)
+//   0x1000_1000  interrupt controller: CLAIM (read), COMPLETE (write)
 //   0x2000_0000  data region, 64 KiB: the data RAM, DATA_WORDS words
+//   0xE000_E000  System Control Space: the interrupt controller's NVIC,
+//                SysTick and SCB registers (thumbv_nvic.v, model/thumbv/nvic.py)
 // A RAM smaller than its region repeats (aliases) through it, so the board's
 // small RAMs run the same programs as long as their parts don't collide.
 // Anything else gives an access fault: instruction fetches outside the code
@@ -22,7 +25,7 @@ module thumbv_soc #(
 ) (
     input  wire       clk,
     input  wire       reset,              // synchronous, active high
-    input  wire       irq_timer,          // the core's machine timer interrupt
+    input  wire [31:0] irq,               // interrupt lines 0-31, to the controller
     output wire       uart_tx,
     output reg  [7:0] leds
 );
@@ -66,8 +69,8 @@ module thumbv_soc #(
         .dBus_rsp_ready           (dbus_rsp_ready),
         .dBus_rsp_error           (dbus_rsp_error),
         .dBus_rsp_data            (dbus_rsp_data),
-        .timerInterrupt           (irq_timer),
-        .externalInterrupt        (1'b0),
+        .timerInterrupt           (1'b0),            // SysTick is in the controller
+        .externalInterrupt        (nvic_irq),
         .softwareInterrupt        (1'b0),
         // The retire trace (RVFI) is read by the simulation testbench only.
         .thumbNzcv (),            // NZCV after each retired op: read by sim/tb.sv for the trace
@@ -96,6 +99,7 @@ module thumbv_soc #(
     wire d_code = in_code(dbus_cmd_address);
     wire d_data = in_data(dbus_cmd_address);
     wire d_io   = in_io(dbus_cmd_address);
+    wire d_nvic = dbus_cmd_address[31:12] == 20'hE000E || dbus_cmd_address[31:3] == 29'h0200_0200;
     wire d_read = dbus_cmd_valid && !dbus_cmd_wr;
 
     // --- Code RAM: port A fetches instructions, port B is the data port ---------
@@ -152,14 +156,31 @@ module thumbv_soc #(
             leds <= dbus_cmd_data[7:0];
     end
 
+    // --- Interrupt controller ---------------------------------------------------
+
+    wire        nvic_irq;
+    wire [31:0] nvic_rdata;
+
+    thumbv_nvic nvic (
+        .clk       (clk),
+        .reset     (reset),
+        .bus_valid (dbus_cmd_valid && d_nvic),
+        .bus_wr    (dbus_cmd_wr),
+        .bus_addr  (dbus_cmd_address),
+        .bus_wdata (dbus_cmd_data),
+        .bus_rdata (nvic_rdata),
+        .lines     (irq),
+        .irq       (nvic_irq)
+    );
+
     // --- Data responses: one cycle after the command, for loads only -------------
 
-    reg [1:0]  rsp_sel;   // 0 code, 1 data, 2 I/O, 3 unmapped
+    reg [2:0]  rsp_sel;   // 0 code, 1 data, 2 I/O, 3 unmapped, 4 interrupt controller
     reg [31:0] io_rdata;
 
     always @(posedge clk) begin
         dbus_rsp_ready <= !reset && d_read;
-        rsp_sel        <= d_code ? 2'd0 : d_data ? 2'd1 : d_io ? 2'd2 : 2'd3;
+        rsp_sel        <= d_code ? 3'd0 : d_data ? 3'd1 : d_io ? 3'd2 : d_nvic ? 3'd4 : 3'd3;
         case (dbus_cmd_address[3:2])
             2'd1:    io_rdata <= {31'b0, uart_busy};
             2'd2:    io_rdata <= {24'b0, leds};
@@ -168,11 +189,12 @@ module thumbv_soc #(
     end
 
     always @(*) begin
-        dbus_rsp_error = rsp_sel == 2'd3;
+        dbus_rsp_error = rsp_sel == 3'd3;
         case (rsp_sel)
-            2'd0:    dbus_rsp_data = code_rdata;
-            2'd1:    dbus_rsp_data = data_rdata;
-            2'd2:    dbus_rsp_data = io_rdata;
+            3'd0:    dbus_rsp_data = code_rdata;
+            3'd1:    dbus_rsp_data = data_rdata;
+            3'd2:    dbus_rsp_data = io_rdata;
+            3'd4:    dbus_rsp_data = nvic_rdata;
             default: dbus_rsp_data = 32'b0;
         endcase
     end

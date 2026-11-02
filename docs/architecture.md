@@ -28,7 +28,7 @@ flowchart LR
             CODE["code RAM, 0x0000_0000<br/>256 KiB sim / 32 KiB board<br/>dual port: fetch + data"]:::thumbv
             DATA["data RAM, 0x2000_0000<br/>64 KiB sim / 16 KiB board"]:::thumbv
             IO["I/O, 0x1000_0000<br/>UART TX 115200 · LEDs"]:::thumbv
-            NVIC["interrupt controller, NVIC model (D9)<br/>SysTick timer<br/>Phase 5"]:::planned
+            NVIC["interrupt controller (D9): rtl/soc/thumbv_nvic.v<br/>NVIC, SysTick, SCB registers at 0xE000_E000<br/>CLAIM / COMPLETE at 0x1000_1000"]:::thumbv
             SHIM["peripheral shim for ARM-only mode<br/>Phase 6"]:::planned
             SDRAM["SDRAM controller, 8 MB<br/>Phase 7"]:::planned
         end
@@ -39,10 +39,11 @@ flowchart LR
     DEC --> CODE
     DEC --> DATA
     DEC --> IO
+    DEC --> NVIC
     DEC -.-> SHIM
     DEC -.-> SDRAM
-    NVIC -. "interrupts" .-> CORE
-    TBIRQ -- "irq_timer: timer interrupt" --> CORE
+    NVIC -- "externalInterrupt (mip.MEIP)" --> CORE
+    TBIRQ -- "irq[0]: interrupt line 0" --> NVIC
     CLK --> SOC
 ```
 
@@ -134,11 +135,11 @@ flowchart TB
 | Sequencer, PC hold | `ThumbFetcher.scala`, marked `THUMBV` | built | 3.1 |
 | Interrupt gating | `ThumbFetcher.scala`, through `InterruptionInhibitor` | built; tested under interrupts every few cycles (3.4) | 3.1 |
 | Boot stub for Thumb-only programs, testbench stop on Thumb's `b .` | `model/thumbv/rtlsim.py` (`thumb_boot`), `sim/tb.sv` | built, simulation only | 4.4 |
-| SoC timer interrupt input, testbench interrupt source | `rtl/soc/thumbv_soc.v` (`irq_timer`), `sim/tb.sv` (`+irq`) | built; the board ties it to 0 | 3.4 |
+| SoC interrupt lines, testbench interrupt source | `rtl/soc/thumbv_soc.v` (`irq[31:0]`), `sim/tb.sv` (`+irq` on line 0) | built; the board ties them to 0. Until 5.2, one line to the core's timer input | 3.4 |
 | Flags side-band through fetch and decode | `Thumb.scala`, `ThumbFetcher.scala` (`THUMBV`) | built | 4.2 |
 | Adder with forced subtraction and carry-in | `rtl/core/.../ThumbSrcPlugin.scala`, copied, marked `THUMBV` | built | 4.2 |
 | NZCV flags unit, CSR 0x7C4, NZCV in the trace | `rtl/core/.../ThumbFlagsPlugin.scala` | built: every flag-writing instruction (4.2), and the readers: `B<cond>`, `ADCS`/`SBCS`, `MRS`/`MSR APSR` (4.3) | 4.2 |
-| Interrupt controller, SysTick | SoC | planned | Phase 5 |
+| Interrupt controller, SysTick | `rtl/soc/thumbv_nvic.v` | built: checked cycle by cycle against `model/thumbv/nvic.py` | 5.2 |
 | Peripheral shim | SoC | planned | Phase 6 |
 | SDRAM controller | SoC | planned | Phase 7 |
 | SoC: RAMs, address decode, UART, LEDs | `rtl/soc/` | built | 1.2 |

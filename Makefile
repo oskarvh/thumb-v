@@ -34,7 +34,7 @@ core:
 	verilator --lint-only --top-module thumbv_soc build/rtl/VexRiscv.v rtl/soc/*.v
 
 test-rtl: core
-	THUMBV_REQUIRE_RTL=1 uv run pytest tests/test_rtl.py tests/test_expander_rtl.py
+	THUMBV_REQUIRE_RTL=1 uv run pytest tests/test_rtl.py tests/test_expander_rtl.py tests/test_nvic_rtl.py
 
 board: core
 	uv run python -m thumbv.board $(ELF) $(if $(PROGRAM),--program $(PROGRAM))

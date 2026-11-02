@@ -1,7 +1,8 @@
 /* Phase 4.4: the RISC-V side of loops.c: calls every function on fixed data
  * and returns a checksum of the results, printing them if asked. Linked with
- * loops_main.c (prints, on the board), irq_loops_main.c (under interrupts),
- * or with loops.c as all-RISC-V code (the native reference). */
+ * loops_main.c (prints, on the board), irq_loops_main.c (under interrupts)
+ * or loops_check_main.c (no SoC needed: the model's lockstep, and with
+ * loops.c as all-RISC-V code, the native reference). */
 #include "loops.h"
 #include "soc.h"
 
