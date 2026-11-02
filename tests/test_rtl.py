@@ -235,27 +235,23 @@ def test_thumb_flag_readers(rtl_simulator, build_mixed, tmp_path):
     assert result.a0 == readers_oracle()
 
 
-@pytest.mark.parametrize("seed", [1, 2, 3])
-def test_interrupts_land_between_thumb_instructions(rtl_simulator, build_mixed, tmp_path, seed):
-    """Phase 3.4 (D3): with the timer interrupt raised every few cycles, Thumb
-    code gives the same result, and every interrupt lands between two
-    instructions: none of the interrupted instruction's ops ran before it.
-    Without the sequencer's interrupt gating, the program doesn't finish
-    (checked by hand: an interrupt part-way through a PUSH or POP {pc})."""
-    rv_elf, thumb_elf = build_mixed(["rtl_thumb_lists.S", "rtl_thumb_seq.S", "rtl_thumb_misc.S"],
-                                    ["irq_main.c", "irq_handler.S"])
-    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+def check_interrupts(images, tmp_path, seed):
+    """Run `images` (an irq_*main.c program) without and with interrupts
+    (sim/tb.sv +irq): the same result, and every interrupt between two
+    instructions, none of whose ops ran before it. Returns the interrupts
+    taken: [(mepc, ops the interrupted instruction then ran)], Thumb ones only."""
     (tmp_path / "quiet").mkdir()
     (tmp_path / "irq").mkdir()
     quiet = run(images, tmp_path / "quiet")
+    assert quiet.status == "EXIT"
     assert rtlsim.lockstep(images, quiet) is None
     noisy = run(images, tmp_path / "irq", irq=seed)
-    assert noisy.a0 == quiet.a0
+    assert noisy.status == "EXIT" and noisy.a0 == quiet.a0
 
     entry, read_mepc, mret = (images[0].symbols[s] for s in ("irq_handler", "irq_mepc", "irq_mret"))
     trace = noisy.trace
     entries = [i for i, r in enumerate(trace) if r.pc == entry]
-    thumb, multi_op = 0, 0
+    thumb = []
     for i in entries:
         before = trace[i - 1]
         mepc = next(r.rd_wdata for r in trace[i:] if r.pc == read_mepc)
@@ -267,14 +263,143 @@ def test_interrupts_land_between_thumb_instructions(rtl_simulator, build_mixed, 
         if trace[back].pc == entry:
             continue
         if 0x1_4000 <= mepc < 0x2_0000:
-            thumb += 1
-            # The interrupted instruction, once resumed: several ops?
+            # The interrupted instruction, once resumed: how many ops?
             k = back
             while k + 1 < len(trace) and trace[k + 1].pc == mepc:
                 k += 1
-            multi_op += k > back
-    # Enough of them, in Thumb code, in front of multi-op instructions.
-    assert len(entries) > 300 and thumb > 150 and multi_op > 30, (len(entries), thumb, multi_op)
+            thumb.append((mepc, k - back + 1))
+    assert len(entries) > 300, len(entries)
+    return thumb
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_interrupts_land_between_thumb_instructions(rtl_simulator, build_mixed, tmp_path, seed):
+    """Phase 3.4 (D3): with the timer interrupt raised every few cycles, Thumb
+    code gives the same result, and every interrupt lands between two
+    instructions: none of the interrupted instruction's ops ran before it.
+    Without the sequencer's interrupt gating, the program doesn't finish
+    (checked by hand: an interrupt part-way through a PUSH or POP {pc})."""
+    rv_elf, thumb_elf = build_mixed(["rtl_thumb_lists.S", "rtl_thumb_seq.S", "rtl_thumb_misc.S"],
+                                    ["irq_main.c", "irq_handler.S"])
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    thumb = check_interrupts(images, tmp_path, seed)
+    # Enough of them in Thumb code, in front of multi-op instructions.
+    multi_op = sum(ops > 1 for mepc, ops in thumb)
+    assert len(thumb) > 150 and multi_op > 30, (len(thumb), multi_op)
+
+
+def halfword(images, addr):
+    seg = next(s for img in images for s in img.segments if s.addr <= addr < s.addr + len(s.data))
+    return int.from_bytes(seg.data[addr - seg.addr:addr - seg.addr + 2], "little")
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_interrupts_in_gcc_loops(rtl_simulator, build_mixed, tmp_path, seed):
+    """Phase 4.4: gcc-compiled loops (loops.c) under interrupts every few
+    cycles: the same result, every interrupt between two instructions, and
+    some between a flag-setting instruction and the B<cond> that reads its
+    flags, so NZCV must survive the RISC-V handler."""
+    rv_elf, thumb_elf = build_mixed(["loops.c"], ["irq_loops_main.c", "loops_run.c", "irq_handler.S"])
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    thumb = check_interrupts(images, tmp_path, seed)
+    before_branch = sum(expander.expand(halfword(images, mepc), 0, mepc, rtlsim.HARDWARE).name == "B_cond"
+                        for mepc, ops in thumb)
+    # About 1,900 and 170 per seed.
+    assert len(thumb) > 1000 and before_branch > 100, (len(thumb), before_branch)
+
+
+def test_gcc_loops(rtl_simulator, build_mixed, build_c, tmp_path):
+    """Phase 4.4: gcc-compiled Thumb code with loops and conditions (loops.c),
+    called from RISC-V, in lockstep with the model. Its checksum must match
+    the same sources built all-RISC-V, run in the model."""
+    rv_elf, thumb_elf = build_mixed(["loops.c"], ["loops_main.c", "loops_run.c"])
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    assert result.status == "EXIT"
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    names = {name for (pc, name), n in thumb_instructions_run(images, result).items()}
+    assert names >= {"B_cond", "CMP_imm", "CMP_reg", "ADCS", "TST", "MULS"}, names
+    assert f"checksum           = {result.a0:08x}" in result.uart
+    native = elf.load(build_c("rv32", "irq_loops_main.c", "loops_run.c", "loops.c", "irq_handler.S"))
+    reference = lockstep.simulate([native], stop=native.symbols["done"])
+    assert reference.stopped == "stop address"
+    assert reference.final_regs[0] == 2 * result.a0 & 0xFFFF_FFFF    # it runs them twice
+
+
+@pytest.mark.parametrize("libs, mains, interface", [
+    (["mixed_lib.c"], ["mixed_main.c"], None),
+    (["interwork_lib.c"], ["interwork_main.c"], None),
+    (["abi_lib.c", "string_min.c"], ["abi_main.c", "string_min.c"], "abi.h"),   # with thunks
+], ids=["mixed", "interwork", "abi"])
+def test_mixed_corpus(rtl_simulator, build_mixed, tmp_path, libs, mains, interface):
+    """Phase 4.4: the Phase 0 mixed programs (RISC-V and gcc-compiled Thumb
+    calling each other, with loops) on the RTL, in lockstep with the model."""
+    rv_elf, thumb_elf = build_mixed(libs, mains, interface)
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    assert result.status == "EXIT"
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    model = lockstep.simulate(images, stop=images[0].symbols["done"], options=rtlsim.HARDWARE)
+    assert model.final_regs[0] == result.a0
+    names = {name for (pc, name), n in thumb_instructions_run(images, result).items()}
+    assert "B_cond" in names
+
+
+def run_thumb_program(path, tmp_path, max_cycles=10_000_000):
+    """A Thumb-only program on the RTL behind a RISC-V boot stub, in lockstep:
+    the model, whose state is then the RTL's."""
+    image = elf.load(path)
+    images = [rtlsim.thumb_boot(image), image]
+    result = run(images, tmp_path, max_cycles=max_cycles)
+    assert result.status == "EXIT", result.status
+    divergence, model = rtlsim.replay(images, result)
+    assert divergence is None, str(divergence)
+    return image, result, model
+
+
+def test_thumb_selftest(rtl_simulator, build_c, tmp_path):
+    """Phase 4.4: the Phase 0 Thumb self-test, Thumb-only, on the RTL."""
+    image, result, model = run_thumb_program(build_c("thumb", "thumb_selftest.c"), tmp_path)
+    reference = lockstep.simulate([image], stop=image.symbols["done"])
+    assert result.a0 == reference.final_regs[0]
+
+
+def test_coremark(rtl_simulator, build_bench, tmp_path):
+    """Phase 4.4: CoreMark (one iteration), Thumb-only, on the RTL, in
+    lockstep; CoreMark validates its own results."""
+    image, result, model = run_thumb_program(build_bench.coremark(), tmp_path)
+    n = int.from_bytes(model.mem.read_bytes(image.symbols["coremark_output_len"], 4), "little")
+    out = model.mem.read_bytes(image.symbols["coremark_output"], n).decode()
+    assert "Correct operation validated" in out and "ERROR" not in out, out
+
+
+EMBENCH_LARGE = ["picojpeg", "qrduino", "wikisort", "xgboost"]     # about 1 million ops or more
+
+
+@pytest.mark.parametrize("name", [n for n in build.embench_names() if n not in EMBENCH_LARGE])
+def test_embench(rtl_simulator, build_bench, tmp_path, name):
+    """Phase 4.4: Embench IoT, Thumb-only, on the RTL, in lockstep; main()
+    returns 0 if the benchmark verified its result."""
+    image, result, model = run_thumb_program(build_bench.embench(name), tmp_path)
+    assert result.a0 == 0
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("name", EMBENCH_LARGE)
+def test_embench_large(rtl_simulator, build_bench, tmp_path, name):
+    image, result, model = run_thumb_program(build_bench.embench(name), tmp_path, max_cycles=100_000_000)
+    assert result.a0 == 0
+
+
+@pytest.mark.slow
+def test_float_kernels(rtl_simulator, build_bench, tmp_path):
+    """Soft-float: libgcc's float and double routines and libm; main() returns
+    a checksum, which must be the model's."""
+    image, result, model = run_thumb_program(build_bench.float_kernels(), tmp_path, max_cycles=100_000_000)
+    reference = lockstep.simulate([image], stop=image.symbols["done"])
+    assert result.a0 == reference.final_regs[0]
 
 
 def test_thumb_calls_back_into_riscv(rtl_simulator, build_mixed, tmp_path):

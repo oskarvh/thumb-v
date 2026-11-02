@@ -133,6 +133,7 @@ flowchart TB
 | Expander alone, for the exhaustive check | `ThumbExpander` in `Thumb.scala`, `sim/expander_tb.sv` | built, simulation only | 2.3 |
 | Sequencer, PC hold | `ThumbFetcher.scala`, marked `THUMBV` | built | 3.1 |
 | Interrupt gating | `ThumbFetcher.scala`, through `InterruptionInhibitor` | built; tested under interrupts every few cycles (3.4) | 3.1 |
+| Boot stub for Thumb-only programs, testbench stop on Thumb's `b .` | `model/thumbv/rtlsim.py` (`thumb_boot`), `sim/tb.sv` | built, simulation only | 4.4 |
 | SoC timer interrupt input, testbench interrupt source | `rtl/soc/thumbv_soc.v` (`irq_timer`), `sim/tb.sv` (`+irq`) | built; the board ties it to 0 | 3.4 |
 | Flags side-band through fetch and decode | `Thumb.scala`, `ThumbFetcher.scala` (`THUMBV`) | built | 4.2 |
 | Adder with forced subtraction and carry-in | `rtl/core/.../ThumbSrcPlugin.scala`, copied, marked `THUMBV` | built | 4.2 |

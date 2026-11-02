@@ -429,12 +429,27 @@ Goal: every Thumb instruction runs in hardware with its ARM flags, using the har
      - **The oracle found its own bug,** not the core's: Z after an `ADCS` chain is the last word's, not the whole value's.
      - **Negative control:** a wrong HI condition in the RTL fails the test (wrong branch at the first HI).
      - **Cost:** 6,015 LEs (+134), Fmax 35.0 MHz; the board still runs the callback program.
-4. **gcc code with loops and conditions.**
+4. **gcc code with loops and conditions.** (done)
    - **What runs:**
      - Phase 0 corpus programs, Thumb-only and mixed, on the RTL in lockstep;
      - the 3.4 interrupt test, rerun over a loop, so that interrupts land between `CMP` and `B<cond>`;
      - a program on the board (e.g. CRC or a sort, printing results).
    - **Resources and Fmax** are logged.
+   - **Done:**
+     - **Thumb-only programs on the RTL:** a boot stub (`rtlsim.thumb_boot`) marks a Thumb program's code as a region and jumps to it, and the testbench also stops on Thumb's `b .`. In lockstep with the model, op by op with NZCV:
+       - the Phase 0 self-test;
+       - CoreMark, one iteration: it validates its own results, read from the model's memory after the clean lockstep;
+       - all 19 Embench benchmarks: each verifies its result; the four large ones, up to 5.4 million ops (`xgboost`), with `--slow`;
+       - the soft-float kernels, with `--slow`.
+     - **Mixed programs on the RTL:** the Phase 0 mixed, interworking and ABI (with thunks) programs, in lockstep.
+     - **gcc loops** (`tests/c/loops.c`): CRC-32, a sort, binary search, GCD (libgcc division), 64-bit Fibonacci (`ADCS`) and dot product (libgcc multiplication), a chain of signed and unsigned comparisons, `strcmp`, an integer square root.
+       - **Checks:** in lockstep on the RTL, and against Unicorn in the model, in both modes. Its checksum matches the same sources built all-RISC-V.
+       - **On the board:** `make board PROGRAM=loops` prints the same as the simulation.
+     - **Under interrupts:** the 3.4 test, over the loops, with three seeds. About 1,900 interrupts per run land in Thumb code, about 170 of them between a flag-setting instruction and its `B<cond>`. The results are unchanged, and every interrupt lands between instructions.
+     - **Performance:** CoreMark runs at 1.15 RV32 ops and 1.85 cycles per Thumb instruction (423,292 instructions, 782,844 cycles). That is in simulation, with the zero-wait-state RAMs of the board.
+     - **Resources:** unchanged from 4.3 (no RTL change): 6,015 LEs, Fmax 35.0 MHz.
+
+**Phase 4 is done** (2026-11-01). The hardware flags unit runs every Thumb instruction with its flags. gcc-compiled code with loops and conditions, CoreMark and all of Embench run on the RTL in lockstep with the model; the gcc loops also run under interrupts and on the board. 6,015 LEs (24%), Fmax 35.0 MHz.
 
 **Exit criteria:**
 - The exhaustive check passes with the side-band.
@@ -487,6 +502,7 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board). Phase 3 is done: 3.1–3.3 (the sequencer and every multi-op expansion), 3.4 (interrupts at Thumb boundaries), 3.5 (calls in both directions, in simulation and on the board). Phase 4: 4.1 (strategy C in the model), 4.2 (the flags unit and flag writers in the RTL), 4.3 (the flag readers: the RTL is now all of strategy C).
+Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board). Phase 3 is done: 3.1–3.3 (the sequencer and every multi-op expansion), 3.4 (interrupts at Thumb boundaries), 3.5 (calls in both directions, in simulation and on the board). Phase 4: 4.1 (strategy C in the model), 4.2 (the flags unit and flag writers in the RTL), 4.3 (the flag readers: the RTL is now all of strategy C), 4.4 (gcc code with loops, CoreMark and Embench on the RTL; loops on the board).
 
-1. Phase 4, step 4: gcc-compiled code with loops and conditions, in lockstep, under interrupts and on the board.
+1. Close Phase 4: merge `phase-4` to `main`.
+2. Phase 5: write its detailed section (the interrupt controller and shared entry routine, D9), then start.

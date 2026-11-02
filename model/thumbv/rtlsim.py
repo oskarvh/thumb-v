@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import elf, expander
+from . import rv32
 from .build import REPO, ToolMissing
 from .expander import Options
 from .lockstep import Divergence, Layout, _load_model, describe
@@ -193,12 +194,46 @@ def run(images, out_dir: Path, max_cycles: int = 10_000_000, trace: bool = True,
     return Result(status, int(a0, 16), int(cycles), int(instructions), uart, retired)
 
 
-# The hardware's expander mode until its flags unit (Phase 4): results only.
+# The hardware's expander mode: strategy C, the flags unit (Phase 4).
 HARDWARE = Options(flags="C")
 
 
+RESET_VECTOR = 0x0002_0000
+
+
+def thumb_boot(thumb: elf.Image) -> elf.Image:
+    """A RISC-V boot stub for a Thumb-only program (tests/link/thumb.ld) on the
+    SoC, which resets into RISC-V at RESET_VECTOR: mark the program's code as
+    Thumb region 0, then jump to its entry point. Put it first in the image
+    list, so the model starts there too."""
+    base = min(lo for lo, hi in thumb.code_ranges())
+    limit = max(hi for lo, hi in thumb.code_ranges())
+    limit = (limit + 3) & ~3
+    if limit > RESET_VECTOR:
+        raise ValueError(f"Thumb code up to {limit:#x} overlaps the boot stub at {RESET_VECTOR:#x}")
+    t0 = 5
+
+    def li(value):
+        hi, lo = rv32.split_offset(value)
+        return [rv32.lui(t0, hi & 0xFFFFF), rv32.addi(t0, t0, lo)]
+
+    ops = [*li(base), rv32.csrrw(0, rv32.THUMB_REGION0, t0),
+           *li(limit), rv32.csrrw(0, rv32.THUMB_REGION0 + 1, t0),
+           rv32.fence_i(),
+           *li(thumb.entry & ~1), rv32.jalr(0, t0, 0)]
+    code = b"".join(op.to_bytes(4, "little") for op in ops)
+    return elf.Image("EM_RISCV", RESET_VECTOR, [elf.Segment(RESET_VECTOR, code, True)], {}, {})
+
+
 def lockstep(images, result: Result, options: Options = HARDWARE) -> Divergence | None:
-    """Replay the RTL's retire trace against the model; the first difference, if any.
+    """Replay the RTL's retire trace against the model; the first difference, if any."""
+    return replay(images, result, options)[0]
+
+
+def replay(images, result: Result, options: Options = HARDWARE):
+    """lockstep(), and the model it ran: (divergence or None, Machine). Without
+    a divergence, the model's state is the RTL's, memory included, so a test
+    can read a program's results from it.
 
     The RTL retires each op of a Thumb instruction as its own record, all with
     the instruction's address (PC-hold), so the model runs Thumb code one op
@@ -225,7 +260,7 @@ def lockstep(images, result: Result, options: Options = HARDWARE) -> Divergence 
         target = None
         for op in ops:
             if i == len(trace):
-                return None                       # the run ended part-way through
+                return None, m                    # the run ended part-way through
             r = trace[i]
             problems = []
             if r.pc != pc:
@@ -233,7 +268,7 @@ def lockstep(images, result: Result, options: Options = HARDWARE) -> Divergence 
             elif insn != r.insn & ((1 << 8 * n) - 1):
                 problems.append(f"instruction: model {insn:#0{2 + 2 * n}x}, RTL {r.insn:#010x}")
             if problems:
-                return Divergence(i, r.pc, describe(m, layout, r.pc), problems)
+                return (Divergence(i, r.pc, describe(m, layout, r.pc), problems), m)
             if r.rmask and IO_BASE <= r.mem_addr < IO_BASE + IO_SIZE:
                 m.mem.write(r.mem_addr, 4, r.rdata)   # what the device returned
             before = list(m.x)
@@ -241,7 +276,7 @@ def lockstep(images, result: Result, options: Options = HARDWARE) -> Divergence 
             try:
                 target = m.execute(op, pc, link=pc + length)
             except Trap as trap:
-                return Divergence(i, r.pc, describe(m, layout, r.pc), [f"model trap: {trap}"])
+                return (Divergence(i, r.pc, describe(m, layout, r.pc), [f"model trap: {trap}"]), m)
             changed = {j for j in range(32) if m.x[j] != before[j]}
             if r.rd and m.x[r.rd] != r.rd_wdata:
                 problems.append(f"x{r.rd}: model {m.x[r.rd]:#010x}, RTL {r.rd_wdata:#010x}")
@@ -254,10 +289,10 @@ def lockstep(images, result: Result, options: Options = HARDWARE) -> Divergence 
             if model_stores != rtl_stores:
                 problems.append(f"stores: model {_bytes(model_stores)}, RTL {_bytes(rtl_stores)}")
             if problems:
-                return Divergence(i, r.pc, describe(m, layout, r.pc), problems)
+                return (Divergence(i, r.pc, describe(m, layout, r.pc), problems), m)
             i += 1
         m.pc = target if target is not None else (pc + length) & 0xFFFF_FFFF
-    return None
+    return None, m
 
 
 def _bytes(stores):
