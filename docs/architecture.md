@@ -3,7 +3,7 @@
 Block diagrams of Thumb-V as built so far, and of what the plan adds. They show where every block comes from:
 
 - **Stock (grey):** VexRiscv as published, used unchanged through its plugin interface.
-- **Copied (blue):** VexRiscv code that Thumb-V carries its own copy of (the fetcher, D5), unchanged so far.
+- **Copied (blue):** VexRiscv code that Thumb-V carries its own copy of (the fetcher and `SrcPlugin`, D5), unchanged in that block.
 - **Thumb-V (green):** written or changed for Thumb-V.
 - **Planned (white, dashed):** in the plan, not built yet. The label says which phase.
 
@@ -66,9 +66,9 @@ flowchart TB
         MODE["mode select<br/>inThumb: fetch word in a region?"]:::thumbv
         ALIGN["aligner<br/>halfword buffer, length rule:<br/>RVC bits 1:0 or Thumb.is32"]:::thumbv
         RVCD["RVC decompressor"]:::copied
-        EXP["Thumb.expand, op 0 and whether it's the last<br/>(results only: no flags yet)"]:::thumbv
+        EXP["Thumb.expand, op 0, its flags side-band<br/>and whether it's the last"]:::thumbv
         INJ["injector register<br/>decodeInput"]:::copied
-        SEQ["sequencer<br/>op 0 from the injector register; Thumb.expand of op step + 1<br/>into nextOp/nextLast and the register file's early address<br/>holds decodeInput until the last op; PC hold (injectedDecode)"]:::thumbv
+        SEQ["sequencer<br/>op 0 from the injector register; Thumb.expand of op step + 1<br/>into nextOp/nextLast/nextSide and the register file's early address<br/>holds decodeInput until the last op; PC hold (injectedDecode)"]:::thumbv
         DPC["decodePc<br/>decode PC += IS_RVC ? 2 : 4"]:::copied
     end
 
@@ -76,12 +76,14 @@ flowchart TB
 
     subgraph PIPE["Pipeline: VexRiscv plugins, stock"]
         DECODE["Decode<br/>DecoderSimplePlugin: decode, illegal instructions<br/>RegFilePlugin: register file, synchronous read<br/>HazardSimplePlugin: full bypassing"]:::stock
-        EXEC["Execute<br/>SrcPlugin · IntAluPlugin · FullBarrelShifterPlugin<br/>MulPlugin, DivPlugin: start<br/>CsrPlugin: CSR reads and writes<br/>DBusSimplePlugin: load/store command"]:::stock
+        EXEC["Execute<br/>IntAluPlugin · FullBarrelShifterPlugin<br/>MulPlugin, DivPlugin: start<br/>CsrPlugin: CSR reads and writes<br/>DBusSimplePlugin: load/store command"]:::stock
         MEMORY["Memory<br/>BranchPlugin: branches and jumps resolve<br/>DBusSimplePlugin: load response"]:::stock
         WB["WriteBack<br/>register file write<br/>CsrPlugin: trap and interrupt entry, mepc<br/>FormalPlugin: RVFI retire trace"]:::stock
     end
 
-    NZCV["NZCV flags unit (D1)<br/>set-flags side-band, carry in, B#lt;cond#gt;<br/>Phase 4"]:::planned
+    SRC["ThumbSrcPlugin, in execute<br/>SrcPlugin copy: the adder, with the side-band's<br/>forced subtraction and C as carry-in"]:::thumbv
+    NZCV["ThumbFlagsPlugin (D1), in execute<br/>NZCV register, CSR 0x7C4<br/>flags from the adder, shifter, result"]:::thumbv
+    BCOND["ThumbFlagsPlugin: B#lt;cond#gt;<br/>BRANCH_DO = the condition on NZCV"]:::thumbv
     GATE["interrupt gating<br/>InterruptionInhibitor while op 1+ is in decode"]:::thumbv
 
     PC --> CMD --> RSP --> ALIGN
@@ -91,7 +93,7 @@ flowchart TB
     RVCD --> INJ
     EXP --> INJ
     INJ -- "raw Thumb instruction, op 0" --> SEQ
-    SEQ -- "op, next op's rs1/rs2" --> DECODE
+    SEQ -- "op, side-band, next op's rs1/rs2" --> DECODE
     DPC -- "PC, IS_RVC" --> DECODE
     REGIONS --> MODE
     DECODE --> EXEC --> MEMORY --> WB
@@ -100,15 +102,23 @@ flowchart TB
     WB -- "trap target: mtvec" --> PC
     SEQ --> GATE
     GATE -- "allowInterrupts" --> WB
-    EXEC -.-> NZCV
-    NZCV -.-> EXEC
+    DECODE -- "side-band" --> SRC
+    SRC -- "operands, sum" --> NZCV
+    NZCV -- "C" --> SRC
+    EXEC -- "SHIFT_RIGHT, result" --> NZCV
+    EXEC -- "csrr/csrw 0x7C4" --> NZCV
+    NZCV -- "NZCV after each op: trace" --> WB
+    NZCV --> BCOND
+    BCOND -- "BRANCH_DO" --> MEMORY
 ```
 
 **Where the PC comes from.** The decode stage's PC isn't carried down from fetch: `decodePc` keeps its own register, which advances by 2 or 4 (`IS_RVC`) when decode consumes an instruction, and is reloaded on jumps. That is what makes PC-hold cheap for multi-op Thumb instructions ([vexriscv-notes.md](vexriscv-notes.md#where-the-pc-comes-from-pc-hold-for-free)).
 
 **The expander is checked on its own.** `make core` also generates `ThumbExpander.v`, the same `Thumb.expand` function as a module of its own. `tests/test_expander_rtl.py` runs every 16-bit Thumb instruction and a large sweep of 32-bit ones through it in Verilator and compares each op with the model. The core uses the function directly, in the fetcher, so the two can't differ.
 
-**Thumb instructions in the pipeline.** After the aligner, a Thumb instruction is an ordinary RV32 op (or, from Phase 3, a short sequence of them), so the pipeline's stock plugins run it unchanged. What Thumb-V adds downstream of fetch is small: the region CSRs, the flags unit and the interrupt gating, each a separate plugin through VexRiscv's services (D5).
+**Thumb instructions in the pipeline.** After the aligner, a Thumb instruction is an ordinary RV32 op (or, from Phase 3, a short sequence of them), so the pipeline's stock plugins run it unchanged. What Thumb-V adds downstream of fetch is small: the region CSRs, the flags unit and the interrupt gating, each a separate plugin through VexRiscv's services (D5), and the copy of `SrcPlugin`, whose adder needed a carry-in.
+
+**The flags side-band.** Each op carries 8 bits beside its RV32 word: a flags kind and, for `B<cond>`, a condition. Decode inserts them as a stageable (`ThumbFlagsPlugin.SIDE`), 0 for RISC-V. In execute the kind can make the adder subtract or add C, and tells the flags unit which flags to compute and from what. Every flag write and read is in execute, so there's no hazard to check ([plan.md](plan.md#phase-4-flags)).
 
 ## Status
 
@@ -119,12 +129,15 @@ flowchart TB
 | Mode select, Thumb length rule in the aligner | `ThumbFetcher.scala`, marked `THUMBV` | built | 2.1 |
 | Thumb region CSRs | `rtl/core/.../ThumbRegionPlugin.scala` | built | 2.1 |
 | Expander, single ops | `rtl/core/.../Thumb.scala` | built: every instruction whose expansion is one op, results only; checked exhaustively against the model | 2.2 (2.1: a stub) |
-| Expander, multi-op | `Thumb.scala` | built: every result-only expansion (3.1–3.3), checked op by op against the model | 3.1 |
+| Expander, multi-op | `Thumb.scala` | built: every expansion of the model's strategy C (3.1–4.3), checked op by op against the model | 3.1 |
 | Expander alone, for the exhaustive check | `ThumbExpander` in `Thumb.scala`, `sim/expander_tb.sv` | built, simulation only | 2.3 |
 | Sequencer, PC hold | `ThumbFetcher.scala`, marked `THUMBV` | built | 3.1 |
 | Interrupt gating | `ThumbFetcher.scala`, through `InterruptionInhibitor` | built; tested under interrupts every few cycles (3.4) | 3.1 |
+| Boot stub for Thumb-only programs, testbench stop on Thumb's `b .` | `model/thumbv/rtlsim.py` (`thumb_boot`), `sim/tb.sv` | built, simulation only | 4.4 |
 | SoC timer interrupt input, testbench interrupt source | `rtl/soc/thumbv_soc.v` (`irq_timer`), `sim/tb.sv` (`+irq`) | built; the board ties it to 0 | 3.4 |
-| NZCV flags unit | plugin | planned | Phase 4 |
+| Flags side-band through fetch and decode | `Thumb.scala`, `ThumbFetcher.scala` (`THUMBV`) | built | 4.2 |
+| Adder with forced subtraction and carry-in | `rtl/core/.../ThumbSrcPlugin.scala`, copied, marked `THUMBV` | built | 4.2 |
+| NZCV flags unit, CSR 0x7C4, NZCV in the trace | `rtl/core/.../ThumbFlagsPlugin.scala` | built: every flag-writing instruction (4.2), and the readers: `B<cond>`, `ADCS`/`SBCS`, `MRS`/`MSR APSR` (4.3) | 4.2 |
 | Interrupt controller, SysTick | SoC | planned | Phase 5 |
 | Peripheral shim | SoC | planned | Phase 6 |
 | SDRAM controller | SoC | planned | Phase 7 |

@@ -6,9 +6,10 @@ import gen_directed
 from thumbv import elf, lockstep
 
 
+@pytest.mark.parametrize("flags", ["A", "C"])
 @pytest.mark.parametrize("group", gen_directed.GROUPS)
-def test_directed(build_thumb_asm, group):
+def test_directed(build_thumb_asm, group, flags):
     image = elf.load(build_thumb_asm(group, gen_directed.GROUPS[group]()))
-    result = lockstep.run([image], stop=image.symbols["done"])
+    result = lockstep.run([image], stop=image.symbols["done"], flags=flags)
     assert result.ok, f"{result.stopped}\n{result.divergence}"
     assert result.thumb_steps > 50

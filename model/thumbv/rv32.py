@@ -16,6 +16,46 @@ THUMB_REGION0 = 0x7C0
 THUMB_REGIONS = 2
 MSTATUS_MIE = 1 << 3
 MSTATUS_MPP = 3 << 11   # machine mode, the only one: hard-wired, as on VexRiscv
+# The flags unit's NZCV (strategy C), custom machine read/write: bits 31:28
+# as in the APSR, the rest read as zero.
+NZCV = 0x7C4
+
+# --- Flags side-band (strategy C) ----------------------------------------------
+# An expanded op can carry a flags kind (bits 35:32) and a condition (bits
+# 39:36) beside its 32-bit RV32 word, as the hardware carries them beside the
+# instruction. RISC-V code never has them. See docs/plan.md, Phase 4.
+SIDEBAND = 32
+MASK32 = 0xFFFF_FFFF
+NZ = 1          # N, Z from the result
+ADD = 2         # rd = rs1 + src2, NZCV from the adder
+SUB = 3         # rd = rs1 - src2 (also on addi: rs1 - imm), C = NOT borrow
+ADC = 4         # rd = rs1 + src2 + C
+SBC = 5         # rd = rs1 - src2 - NOT C
+SHL = 6         # N, Z from the result, C = rs1[-shamt mod 32]
+SHR = 7         # N, Z from the result, C = rs1[(shamt - 1) mod 32]
+CW = 8          # C = result[0] if result[1] is set
+BRANCH = 9      # on beq x0, x0: taken only if the condition holds
+KIND_NAMES = {NZ: "nz", ADD: "add", SUB: "sub", ADC: "adc", SBC: "sbc", SHL: "shl",
+              SHR: "shr", CW: "cw", BRANCH: "branch"}
+
+
+def flagged(op, kind, cond=0):
+    """`op` with a flags kind (and, for BRANCH, an ARM condition) attached."""
+    assert op <= MASK32 and kind in KIND_NAMES and 0 <= cond < 15
+    return op | kind << SIDEBAND | cond << (SIDEBAND + 4)
+
+
+def kind(op):
+    return op >> SIDEBAND & 15
+
+
+def cond(op):
+    return op >> (SIDEBAND + 4) & 15
+
+
+def word(op):
+    """The RV32 instruction word, without the side-band."""
+    return op & MASK32
 
 _LOAD, _STORE, _BRANCH, _JALR, _JAL = 0x03, 0x23, 0x63, 0x67, 0x6F
 _OP_IMM, _OP, _LUI, _AUIPC = 0x13, 0x33, 0x37, 0x17

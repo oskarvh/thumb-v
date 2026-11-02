@@ -140,7 +140,7 @@ For the early phases, use on-chip M9K RAM (~66 KB on the 10CL025) and defer the 
 
 | # | Decision | Status |
 |---|---|---|
-| D1 | Flags strategy for the RTL | **Decided:** C, a plain hardware NZCV unit, keeping custom hardware to a minimum: 1.25 RV32 ops per Thumb instruction over 21 programs, against 3.92 for A, 2.34 for the best realisable A variant and 2.67 for B. The ARM-shift micro-op (Q3) and fused `CMP` + `B<cond>` (together 1.03) are not adopted, but stay options for Phase 7 ([flags-decision.md](flags-decision.md)) |
+| D1 | Flags strategy for the RTL | **Decided:** C, a plain hardware NZCV unit, keeping custom hardware to a minimum: 1.25 RV32 ops per Thumb instruction over 21 programs, against 3.92 for A, 2.34 for the best realisable A variant and 2.67 for B. The ARM-shift micro-op (Q3) and fused `CMP` + `B<cond>` (together 1.05) are not adopted, but stay options for Phase 7 ([flags-decision.md](flags-decision.md)) |
 | D2 | Register mapping | **Decided:** ABI-aligned mapping (section 1) |
 | D3 | When interrupts are taken | **Decided:** Thumb instruction boundaries only (section 6) |
 | D4 | Base core | **Decided** after 1.3: VexRiscv. Every patch point exists, and the PC-hold spike worked in about 30 lines. VexiiRiscv was not evaluated in depth; NEORV32 stays the fallback ([vexriscv-notes.md](vexriscv-notes.md#decisions)) |
@@ -356,10 +356,110 @@ Goal: every Thumb instruction that doesn't need the flags runs in hardware, howe
 - The interrupt test shows no interrupt inside a Thumb instruction.
 - Resources and Fmax are logged.
 
+## Phase 4: Flags
+
+Goal: every Thumb instruction runs in hardware with its ARM flags, using the hardware NZCV unit decided in D1 ([flags-decision.md](flags-decision.md)). Ordinary gcc-compiled code with loops and conditions runs on the RTL and the board.
+
+**Design** (from reading VexRiscv's `SrcPlugin`, `IntAluPlugin`, `FullBarrelShifterPlugin`, `BranchPlugin` and `CsrPlugin`):
+- **Side-band, not new encodings.** Each expanded op carries a 4-bit flags kind and a 4-bit condition beside its 32-bit RV32 word, like `last`. RISC-V code always has kind 0. In the model, an op is an int with the side-band in bits 32–39, so expansions stay tuples of ints and the exhaustive check compares 40 bits. This replaces the `custom-0` micro-op idea in 0.3.
+
+  | Kind | On | Effect |
+  |---|---|---|
+  | `NZ` | any ALU op | N, Z from the result |
+  | `ADD`, `SUB` | `add`, `sub`, `addi` | the result is `rs1 + src2` or `rs1 - src2`; NZCV from the adder (C = NOT borrow for subtraction) |
+  | `ADC`, `SBC` | `add`, `sub` | the same, with C as the carry-in |
+  | `SHL`, `SHR` | `slli`, `srli`, `srai` | N, Z from the result; C = `rs1[-shamt mod 32]` or `rs1[shamt - 1 mod 32]` |
+  | `CW` | any ALU op | if result bit 1 is set, C = result bit 0 (the register shifts' software C, which leaves C alone for an amount of 0) |
+  | `BRANCH` | `beq x0, x0, off` | taken only if the condition holds on NZCV |
+
+- **Where it plugs in:**
+  - **Kind and condition:** decode inserts them from the sequencer, op 0's through the injector register like `last0`.
+  - **The adder:** a Thumb-V copy of `SrcPlugin`, because the stock adder can't take a carry-in. Kinds `SUB` and `SBC` force subtraction, and `ADC` and `SBC` replace the constant carry-in with C. So `SUBS rd, rn, #imm` is `addi rd, rn, imm` with kind `SUB`, and no extra adder or result mux is needed. Nothing looks `SrcPlugin` up by class, so the copy is a drop-in.
+  - **A new `ThumbFlagsPlugin`:**
+    - holds NZCV;
+    - computes the new flags in execute: from the adder's operand and result sign bits; from `SHIFT_RIGHT` for shifts (the shifter's result reaches the register file only in memory, but `SHIFT_RIGHT` exists in execute); from `REGFILE_WRITE_DATA` otherwise;
+    - writes NZCV when execute fires;
+    - overrides `BRANCH_DO` in execute for `BRANCH` ops (the stock stage mechanism allows that without a copy, as the shifter does for `REGFILE_WRITE_DATA`).
+  - **NZCV as CSR `0x7C4`**, bits 31:28 like the APSR, for `MRS`/`MSR APSR` and later for interrupt entry and RTOS context switches. `CsrPlugin` also reads and writes in execute, and waits for the stages after it to drain.
+- **No hazards:** every flag write and every flag read (`BRANCH`, the carry-in, the CSR) happens in execute. The pipeline is in order, so a reader in execute always sees the writes of all older instructions. `CMP` + `B<cond>` back to back runs without a stall.
+- **`MULS`:** the product only exists in writeback, so `MULS` becomes `mul` then `addi rd, rd, 0` with kind `NZ`. That's one extra op, and all flag writes stay in execute.
+- **Expansions under C:**
+  - **One op:** `ADDS`, `SUBS`, `CMP`, `CMN`, `RSBS`, `ADCS`, `SBCS`, the logical ops, `MOVS`, `MVNS`, `TST`, the immediate shifts (except by 32), and `B<cond>`. Compares write `x0`.
+  - **Two ops:** `MULS`, `BICS`, and `LSRS`/`ASRS` by 32 (C from bit 31 by `SHR` with shamt 0, then the result).
+  - **Register shifts:** 11–13 ops. The 5-op result, the carry candidate in software, then a `CW` op (Q3).
+  - **`MRS`/`MSR APSR`:** one CSR op each.
+- **Restartability:** no load or store may follow a flag-writing op in an expansion. Otherwise a fault there would restart the instruction with its flag inputs already changed (`ADCS`). `tests/test_restartable.py` gains the rule.
+- **Interrupts:** RISC-V code never writes NZCV, so a RISC-V handler interrupting Thumb code leaves it intact. Saving it around a Thumb handler is Phase 5.
+
+**Steps:**
+1. **Model: strategy C.** (done)
+   - **The mode:** `Options(flags="C")`, with the side-band op format; `Machine` gains NZCV, the side-band semantics and CSR `0x7C4`.
+   - **Checked:**
+     - against strategy A for every 16-bit instruction, registers and flags, as `test_flags_none.py` does for results only;
+     - the Phase 0 corpus in lockstep against Unicorn in mode C.
+   - **Measurement:** `measure.py` costs C from the real expansions instead of the two assumptions in flags-decision.md, which is updated with the result.
+   - **Done:**
+     - **Model:** `Options(flags="C")` in the expander; `Machine` has NZCV, the side-band semantics and CSR `0x7C4`. The expansions are listed in [isa-coverage.md](isa-coverage.md#strategy-c-the-hardware-flags-unit). The longest is `ASRS` by a register, at 14 ops, within the sequencer's 16.
+     - **Against strategy A:** `tests/test_flags_c.py` checks about 21,000 16-bit instructions (every one whose expansion differs), registers, PC and NZCV, plus `MRS`/`MSR APSR`.
+     - **Against Unicorn:** every encoding in single-instruction lockstep (`test_lockstep_single.py`), and every program-level lockstep test, now in both modes. That covers directed, random, mixed and interworking programs, and with `--slow` CoreMark, Embench and the soft-float kernels.
+     - **Restartability:** `test_restartable.py` checks that no load or store follows a flag write, in all three modes.
+     - **Measurement:** C costed from real expansions is still 1.25 ops per Thumb instruction. Register shifts got cheaper (SHA-256 2.07 → 1.81), and `MULS` dearer (`edn` 1.25 → 1.37, 13% `MULS`).
+2. **Flags unit and flag-setting instructions in the RTL.** (done)
+   - **The pieces:** the side-band through the fetcher and decode, the `SrcPlugin` copy, `ThumbFlagsPlugin` with the CSR, and every flag-writing expansion.
+   - **Checking the flags:** the trace gains NZCV after each op, piped to writeback beside the RVFI record, so the lockstep compares flags op by op.
+   - **Interim mode:** until step 3, instructions that read the flags stay illegal.
+   - **Exhaustive check:** extends to the side-band.
+   - **Done:**
+     - **The unit:** `ThumbFlagsPlugin` (NZCV, CSR `0x7C4`, flags computed in execute) and `ThumbSrcPlugin` (the `SrcPlugin` copy with forced subtraction and the carry-in), with the side-band through the fetcher and decode as designed ([core.md](core.md#thumb-v-changes)).
+     - **Interim mode:** the model had `Options(flags="C", flag_readers=False)` as `rtlsim.HARDWARE`, removed again in 4.3.
+     - **Exhaustive check:** passed first time with the 40-bit ops.
+     - **Lockstep with flags:** the core's `thumbNzcv` output is logged with every retired op and compared with the model's NZCV. Its first run found a real bug: N and Z of a shift op with kind `NZ` (the last op of `ASRS` by a register) came from `REGFILE_WRITE_DATA`, which VexRiscv's shifter only fills in memory. They now come from `SHIFT_RIGHT` for any shift. The exhaustive check can't see this; only running the core can.
+     - **Directed test:** `test_thumb_flag_writers` runs every flag writer on nine edge-case operand pairs, with all 27 flag-writing encodings executed. A deliberately wrong V in the RTL fails it.
+     - **On the board:** the callback program still runs. 5,881 LEs (+267), Fmax 33.0 MHz.
+3. **Instructions that read flags:** (done) `B<cond>` (all 14 conditions), `ADCS`/`SBCS`, `MRS`/`MSR APSR`. The RTL then expands exactly strategy C, and `rtlsim.HARDWARE` becomes `Options(flags="C")`. Directed assembly tests, in lockstep:
+   - every condition taken and not taken;
+   - carry chains through `ADCS`/`SBCS` (64-bit add and subtract);
+   - flags across `MSR`/`MRS`.
+   - **Done:**
+     - **RTL:** `B<cond>` is `beq x0, x0` with kind `BRANCH`, whose `BRANCH_DO` the flags unit overrides in execute with the condition on NZCV, through VexRiscv's stage mechanism, with no change to `BranchPlugin`. `ADCS`/`SBCS` use the carry-in from 4.2, `MRS`/`MSR APSR` the CSR. `rtlsim.HARDWARE` is `Options(flags="C")`. The exhaustive check passed first time.
+     - **Directed test:** `test_thumb_flag_readers` (`tests/c/rtl_thumb_readers.S`), in lockstep, and its result against ARM's definitions computed independently in Python:
+       - all 14 conditions under all 16 NZCV values, taken and not, forward and backward;
+       - 128-bit add and subtract (`ADDS` + 3 `ADCS`, `SUBS` + 3 `SBCS`) on 25 operand pairs, with the APSR read back by `MRS`;
+       - `MSR`/`MRS` round trips.
+     - **The oracle found its own bug,** not the core's: Z after an `ADCS` chain is the last word's, not the whole value's.
+     - **Negative control:** a wrong HI condition in the RTL fails the test (wrong branch at the first HI).
+     - **Cost:** 6,015 LEs (+134), Fmax 35.0 MHz; the board still runs the callback program.
+4. **gcc code with loops and conditions.** (done)
+   - **What runs:**
+     - Phase 0 corpus programs, Thumb-only and mixed, on the RTL in lockstep;
+     - the 3.4 interrupt test, rerun over a loop, so that interrupts land between `CMP` and `B<cond>`;
+     - a program on the board (e.g. CRC or a sort, printing results).
+   - **Resources and Fmax** are logged.
+   - **Done:**
+     - **Thumb-only programs on the RTL:** a boot stub (`rtlsim.thumb_boot`) marks a Thumb program's code as a region and jumps to it, and the testbench also stops on Thumb's `b .`. In lockstep with the model, op by op with NZCV:
+       - the Phase 0 self-test;
+       - CoreMark, one iteration: it validates its own results, read from the model's memory after the clean lockstep;
+       - all 19 Embench benchmarks: each verifies its result; the four large ones, up to 5.4 million ops (`xgboost`), with `--slow`;
+       - the soft-float kernels, with `--slow`.
+     - **Mixed programs on the RTL:** the Phase 0 mixed, interworking and ABI (with thunks) programs, in lockstep.
+     - **gcc loops** (`tests/c/loops.c`): CRC-32, a sort, binary search, GCD (libgcc division), 64-bit Fibonacci (`ADCS`) and dot product (libgcc multiplication), a chain of signed and unsigned comparisons, `strcmp`, an integer square root.
+       - **Checks:** in lockstep on the RTL, and against Unicorn in the model, in both modes. Its checksum matches the same sources built all-RISC-V.
+       - **On the board:** `make board PROGRAM=loops` prints the same as the simulation.
+     - **Under interrupts:** the 3.4 test, over the loops, with three seeds. About 1,900 interrupts per run land in Thumb code, about 170 of them between a flag-setting instruction and its `B<cond>`. The results are unchanged, and every interrupt lands between instructions.
+     - **Performance:** CoreMark runs at 1.15 RV32 ops and 1.85 cycles per Thumb instruction (423,292 instructions, 782,844 cycles). That is in simulation, with the zero-wait-state RAMs of the board.
+     - **Resources:** unchanged from 4.3 (no RTL change): 6,015 LEs, Fmax 35.0 MHz.
+
+**Phase 4 is done** (2026-11-01). The hardware flags unit runs every Thumb instruction with its flags. gcc-compiled code with loops and conditions, CoreMark and all of Embench run on the RTL in lockstep with the model; the gcc loops also run under interrupts and on the board. 6,015 LEs (24%), Fmax 35.0 MHz.
+
+**Exit criteria:**
+- The exhaustive check passes with the side-band.
+- Corpus programs with loops run on the RTL in lockstep with the model, under interrupts.
+- A loop-heavy program runs on the board.
+- Resources and Fmax are logged.
+
 ## Later phases (outline)
 
 Each will get its own detailed section when it starts.
-- **Phase 4: flags,** with the hardware NZCV unit (D1): the unit and its CSR, the set-flags side-band bit, branch-on-condition, carry-in for `ADCS`/`SBCS`, and a strategy C expansion in the model to check the RTL against.
 - **Phase 5: interrupts and mixed execution in practice.**
   - The unified controller (NVIC programming model) and the shared timer (SysTick / `mtime` views) in RTL, verified in simulation against a model of the controller.
   - The shared RISC-V entry routine and synchronous trap handler (`SVC`/`ecall` from either instruction set). Milestone: a timer interrupt handled by a Thumb ISR from a Cortex-M-compiled object, interrupting RISC-V code, and the reverse.
@@ -402,7 +502,7 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board). Phase 3 is done: 3.1–3.3 (the sequencer and every multi-op expansion), 3.4 (interrupts at Thumb boundaries), 3.5 (calls in both directions, in simulation and on the board).
+Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board). Phase 3 is done: 3.1–3.3 (the sequencer and every multi-op expansion), 3.4 (interrupts at Thumb boundaries), 3.5 (calls in both directions, in simulation and on the board). Phase 4: 4.1 (strategy C in the model), 4.2 (the flags unit and flag writers in the RTL), 4.3 (the flag readers: the RTL is now all of strategy C), 4.4 (gcc code with loops, CoreMark and Embench on the RTL; loops on the board).
 
-1. Close Phase 3: merge `phase-3` to `main`.
-2. Phase 4: write its detailed section (the NZCV flags unit, D1), then start.
+1. Close Phase 4: merge `phase-4` to `main`.
+2. Phase 5: write its detailed section (the interrupt controller and shared entry routine, D9), then start.

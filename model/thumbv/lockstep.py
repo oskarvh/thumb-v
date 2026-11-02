@@ -16,8 +16,8 @@ adjusted:
 - Q1: a BX, BLX or POP {pc} to an even address outside the Thumb regions
   returns to RISC-V. A Cortex-M would fault, so the reference sets bit 0 of
   the target for that instruction only.
-- Flags are UNKNOWN after a call (AAPCS), and RISC-V code may clobber the
-  model's flag registers. On each RISC-V -> Thumb transition the reference
+- Flags are UNKNOWN after a call (AAPCS), and under strategy A RISC-V code
+  may clobber the model's flag registers. On each RISC-V -> Thumb transition the reference
   adopts the model's flags.
 """
 
@@ -31,6 +31,7 @@ import unicorn
 from unicorn import arm_const as A
 
 from . import elf, isa, regmap
+from . import rv32 as r
 from .expander import Options, expand
 from .machine import PAGE, Machine, Trap
 
@@ -244,6 +245,16 @@ def _disassemble(dis, code, addr):
     return f"{insn.mnemonic} {insn.op_str}".strip() if insn else code.hex()
 
 
+def _describe_op(op, pc):
+    text = _disassemble(_RV_DIS, r.word(op).to_bytes(4, "little"), pc)
+    if r.kind(op) == r.BRANCH:
+        return f"{text} [{_CONDS[r.cond(op)]}]"
+    return f"{text} [{r.KIND_NAMES[r.kind(op)]}]" if r.kind(op) else text
+
+
+_CONDS = "eq ne cs cc mi pl vs vc hi ls ge lt gt le".split()
+
+
 def describe(machine: Machine, layout: Layout, pc: int) -> str:
     """Disassembly of the instruction at pc, with its expansion for Thumb code."""
     try:
@@ -252,7 +263,7 @@ def describe(machine: Machine, layout: Layout, pc: int) -> str:
             hw2 = machine.mem.read(pc + 2, 2) if isa.is_32bit(hw1) else 0
             code = machine.mem.read_bytes(pc, 4 if isa.is_32bit(hw1) else 2)
             exp = expand(hw1, hw2, pc, machine.options)
-            ops = "; ".join(_disassemble(_RV_DIS, op.to_bytes(4, "little"), pc) for op in exp.ops)
+            ops = "; ".join(_describe_op(op, pc) for op in exp.ops)
             return f"{pc:#010x}  {_disassemble(_THUMB_DIS, code, pc):28} -> {ops}"
         code = machine.mem.read_bytes(pc, 4)
         return f"{pc:#010x}  {_disassemble(_RV_DIS, code, pc)}  (RV32)"
@@ -261,12 +272,17 @@ def describe(machine: Machine, layout: Layout, pc: int) -> str:
 
 
 def _model_flags(m):
-    """NZCV from the model's flag registers. After RISC-V code ran they may hold
-    any value, not just 0/1; the expansions treat non-zero as set."""
+    """NZCV: the flags unit under strategy C, else the model's flag registers.
+    After RISC-V code ran those may hold any value, not just 0/1; the
+    expansions treat non-zero as set."""
+    if m.options.flags == "C":
+        return m.nzcv
     return sum(bit for reg, bit in _FLAG_BITS.items() if m.x[reg])
 
 
 _FLAG_BITS = {regmap.FN: 8, regmap.FZ: 4, regmap.FC: 2, regmap.FV: 1}
+_KIND_WRITES = {r.NZ: 0xC, r.ADD: 0xF, r.SUB: 0xF, r.ADC: 0xF, r.SBC: 0xF,
+                r.SHL: 0xE, r.SHR: 0xE, r.CW: 0x2}
 _WRITES_RD = {0x37, 0x17, 0x6F, 0x67, 0x13, 0x33, 0x03, 0x73}  # opcodes with a destination register
 
 
@@ -276,6 +292,11 @@ def _flags_written(m, pc):
     hw2 = m.mem.read(pc + 2, 2) if isa.is_32bit(hw1) else 0
     mask = 0
     for op in expand(hw1, hw2, pc, m.options).ops:
+        if m.options.flags == "C":
+            mask |= _KIND_WRITES.get(r.kind(op), 0)
+            if r.word(op) == r.csrrw(0, r.NZCV, (r.word(op) >> 15) & 31):
+                mask = 0xF   # MSR APSR
+            continue
         if op & 0x7F in _WRITES_RD:
             mask |= _FLAG_BITS.get((op >> 7) & 0x1F, 0)
     return mask
@@ -333,13 +354,14 @@ def simulate(images, stop: int, entry: int | None = None, max_steps: int = 50_00
 
 
 def run(images, stop: int, entry: int | None = None, max_steps: int = 2_000_000,
-        history: int = 8) -> Result:
+        history: int = 8, flags: str = "A") -> Result:
     """Run the model and the reference in lockstep from `entry` until pc == `stop`.
 
-    `entry` defaults to the entry point of the first image.
+    `entry` defaults to the entry point of the first image; `flags` is the
+    model's flags strategy (expander.Options.flags).
     """
     layout = Layout.for_images(images)
-    m = _load_model(images, layout, Options(exact_lr=True))
+    m = _load_model(images, layout, Options(exact_lr=True, flags=flags))
     ref = Reference(layout, images)
     m.pc = ref.pc = (images[0].entry if entry is None else entry) & ~1
     stop &= ~1
@@ -407,12 +429,14 @@ def main(argv=None):
     parser.add_argument("elf", nargs="+", help="ELF images; the first one's entry point is used")
     parser.add_argument("--stop", default="done", help="symbol (or address) to stop at")
     parser.add_argument("--max-steps", type=int, default=2_000_000)
+    parser.add_argument("--flags", choices=["A", "C"], default="A",
+                        help="flags strategy: A (software, default) or C (the hardware flags unit)")
     args = parser.parse_args(argv)
 
     images = [elf.load(p) for p in args.elf]
     symbols = {k: v for img in images for k, v in img.symbols.items()}
     stop = symbols[args.stop] if args.stop in symbols else int(args.stop, 0)
-    result = run(images, stop, max_steps=args.max_steps)
+    result = run(images, stop, max_steps=args.max_steps, flags=args.flags)
     print(f"{result.steps} steps ({result.thumb_steps} Thumb instructions, "
           f"{result.rv_ops} RV32 ops in the model), stopped: {result.stopped}")
     if result.divergence:

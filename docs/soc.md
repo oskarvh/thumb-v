@@ -39,7 +39,7 @@ The 256 KiB code RAM fits in simulation only: the 10CL025 has about 66 KB of blo
 - **Trace:** it logs every retired instruction from the core's RVFI port (VexRiscv's `FormalPlugin`).
 - **Waveforms:** `+wave=<file>` dumps every signal to an FST file, for GTKWave or Surfer. See [Waveforms](#waveforms).
 - **Interrupts:** `+irq=<seed>` raises the core's timer interrupt (the SoC's `irq_timer` input) after a pseudo-random delay of 1 to 29 cycles, and holds it until the program acknowledges with a store to `0x1000_000C`. The SoC drops stores to that unmapped address, but the testbench sees it. Then the next delay starts. On the board, `irq_timer` is tied to 0 until the interrupt controller (Phase 5).
-- **Stopping:** the run ends when the core retires `j .`, the loop the startup code spins in at `done`. The testbench waits for the UART to finish its last byte, then prints `EXIT <a0> <cycles> <instructions>`. If the cycle limit is reached first, it prints `TIMEOUT`.
+- **Stopping:** the run ends when the core retires `j .` or Thumb's `b .` (`0xe7fe`, which no 32-bit RISC-V instruction starts with), the loops the startup code spins in at `done`. The testbench waits for the UART to finish its last byte, then prints `EXIT <a0> <cycles> <instructions>`. If the cycle limit is reached first, it prints `TIMEOUT`.
 
 ## Waveforms
 
@@ -60,7 +60,8 @@ gtkwave build/sim/hello.fst      # or: surfer build/sim/hello.fst
 `model/thumbv/rtlsim.py` builds the testbench when its sources change, converts ELF files into memory images, runs them, and replays the trace against the model. For every retired instruction, the model must have:
 - the same PC and instruction word;
 - the same destination register and value, and no other register write;
-- the same bytes stored.
+- the same bytes stored;
+- in Thumb code, the same NZCV after every op (the core's `thumbNzcv` output, logged beside the RVFI record, Phase 4.2).
 
 Loads from the I/O registers are inputs from outside the core, so the model is given whatever value the RTL read. The UART's busy bit depends on timing that the model doesn't simulate.
 
@@ -75,4 +76,6 @@ uv run python -m thumbv.rtlsim build/hello.elf
 
 Limits for now:
 - **No trap handling.** The model doesn't model taking a trap: it stops with `Trap`. So the lockstep covers programs that don't trap. Trap handling comes with the trap entry routine (Phase 5).
-- **RISC-V code only.** Thumb code needs the expander in the RTL (Phase 2). The model side is ready: the same lockstep will then check Thumb instructions, with each one retiring as several RV32 ops.
+- **Interrupts:** the model doesn't take them, so a run with `+irq` isn't replayed; `tests/test_rtl.py` checks its result and where each interrupt landed instead (Phases 3.4, 4.4).
+
+**Thumb-only programs** (linked by `tests/link/thumb.ld`, such as CoreMark and Embench) run behind a boot stub that `rtlsim.thumb_boot` generates: at the reset vector, it marks the program's code as Thumb region 0 and jumps to its entry point (Phase 4.4). `rtlsim.replay` returns the model after a clean lockstep, whose memory is then the RTL's, so a test can read results from it, such as CoreMark's own validation text.

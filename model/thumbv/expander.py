@@ -19,22 +19,29 @@ interim mode until its flags unit (Phase 4): flag-setting instructions
 compute only their result, compares do nothing, and instructions that read
 the flags (ADCS, SBCS, B<cond>, MRS/MSR of the APSR) are illegal, so code
 that depends on flags traps instead of going wrong.
+
+`Options.flags = "C"` is strategy C, the hardware flags unit (D1, Phase 4):
+ops carry a flags kind and condition beside the RV32 word (rv32.flagged), and
+the unit computes NZCV, adds the carry-in and decides conditional branches.
+Most flag-setting instructions are one op; register shifts compute C in
+software and hand it to the unit (Q3).
 """
 
 from dataclasses import dataclass
 
 from . import isa
 from . import rv32 as r
+from .rv32 import ADC, ADD, BRANCH, CW, NZ, SBC, SHL, SHR, SUB, flagged
 from .regmap import FC, FN, FV, FZ, LR, PC, SP, T1, T2, T3, T4, T5, T6, rv
 
 
 @dataclass(frozen=True)
 class Options:
     exact_lr: bool = False  # set bit 0 of LR on BL/BLX, as a real Cortex-M does
-    flags: str = "A"        # "A": strategy A; "none": results only (see above)
+    flags: str = "A"        # "A": strategy A; "none": results only; "C": flags unit (see above)
 
     def __post_init__(self):
-        if self.flags not in ("A", "none"):
+        if self.flags not in ("A", "none", "C"):
             raise ValueError(f"unknown flags mode {self.flags!r}")
 
 
@@ -112,12 +119,15 @@ def _sub_cv(a, b, res, imm=None):
     ]
 
 
-def _with_flags(o, rd, sources, compute, cv):
+def _with_flags(o, rd, sources, compute, cv, c_op=None):
     """Compute into rd (or T1 if rd is also a source), set NZCV, then move to rd.
 
     `rd` is None for compare instructions, whose result only feeds the flags.
-    Without flags, just the result; a compare does nothing.
+    Without flags, just the result; a compare does nothing. Under strategy C,
+    the single op `c_op`.
     """
+    if _c(o):
+        return [c_op]
     if o.flags == "none":
         return compute(rd) if rd is not None else [r.nop()]
     dst = rd if rd is not None and rd not in sources else T1
@@ -158,6 +168,16 @@ def _reads_flags(o):
     return o.flags == "none"
 
 
+def _c(o):
+    """Strategy C: the hardware flags unit."""
+    return o.flags == "C"
+
+
+def _c_if_nonzero(candidate, amount):
+    """Strategy C: C = candidate (0 or 1) unless the shift amount is 0 (kind CW)."""
+    return [r.sltu(T3, 0, amount), r.slli(T3, T3, 1), flagged(r.or_(candidate, candidate, T3), CW)]
+
+
 def _keep_c_if_zero_amount(new_c, amount):
     """FC = new_c, unless the shift amount is 0, which leaves C unchanged."""
     return [
@@ -174,6 +194,8 @@ def _keep_c_if_zero_amount(new_c, amount):
 @_handles("LSLS_imm")
 def _lsls_imm(f, pc, o):
     rd, rm, k = rv(f["d"]), rv(f["m"]), f["i"]  # k != 0: k == 0 decodes as MOVS_reg
+    if _c(o):
+        return [flagged(r.slli(rd, rm, k), SHL)]
     return _result(o, [r.slli(rd, rm, k)],
                    lambda: [r.srli(FC, rm, 32 - k), r.andi(FC, FC, 1), r.slli(rd, rm, k), *_nz(rd)])
 
@@ -181,6 +203,8 @@ def _lsls_imm(f, pc, o):
 @_handles("MOVS_reg")
 def _movs_reg(f, pc, o):
     rd, rm = rv(f["d"]), rv(f["m"])
+    if _c(o):
+        return [flagged(r.mv(rd, rm), NZ)]
     return _result(o, [r.mv(rd, rm)], lambda: [r.mv(rd, rm), *_nz(rd)])
 
 
@@ -192,6 +216,12 @@ def _shift_right_imm(f, pc, o):
         result = r.addi(rd, 0, 0) if k == 32 else r.srli(rd, rm, k)
     else:
         result = r.srai(rd, rm, min(k, 31))
+    if _c(o):
+        if k < 32:
+            return [flagged(result, SHR)]
+        # C = rm[31]: SHR with shamt 0 reads bit (0 - 1) mod 32. Its N, Z are
+        # overwritten by the result's.
+        return [flagged(r.srli(T1, rm, 0), SHR), flagged(result, NZ)]
     return _result(o, [result], lambda: [r.srli(FC, rm, k - 1), r.andi(FC, FC, 1), result, *_nz(rd)])
 
 
@@ -199,14 +229,14 @@ def _shift_right_imm(f, pc, o):
 def _adds_reg(f, pc, o):
     rd, rn, rm = rv(f["d"]), rv(f["n"]), rv(f["m"])
     return _with_flags(o, rd, (rn, rm), lambda d: [r.add(d, rn, rm)],
-                       lambda d: _add_cv(rn, rm, d))
+                       lambda d: _add_cv(rn, rm, d), flagged(r.add(rd, rn, rm), ADD))
 
 
 @_handles("SUBS_reg")
 def _subs_reg(f, pc, o):
     rd, rn, rm = rv(f["d"]), rv(f["n"]), rv(f["m"])
     return _with_flags(o, rd, (rn, rm), lambda d: [r.sub(d, rn, rm)],
-                       lambda d: _sub_cv(rn, rm, d))
+                       lambda d: _sub_cv(rn, rm, d), flagged(r.sub(rd, rn, rm), SUB))
 
 
 @_handles("ADDS_imm3", "ADDS_imm8")
@@ -215,7 +245,7 @@ def _adds_imm(f, pc, o):
     rn = rv(f["n"]) if "n" in f else rd
     imm = f["i"]
     return _with_flags(o, rd, (rn,), lambda d: [r.addi(d, rn, imm)],
-                       lambda d: _add_cv(rn, None, d, imm=imm))
+                       lambda d: _add_cv(rn, None, d, imm=imm), flagged(r.addi(rd, rn, imm), ADD))
 
 
 @_handles("SUBS_imm3", "SUBS_imm8")
@@ -223,13 +253,16 @@ def _subs_imm(f, pc, o):
     rd = rv(f["d"])
     rn = rv(f["n"]) if "n" in f else rd
     imm = f["i"]
+    # Under C, kind SUB makes addi subtract: rn - imm, with ARM's C for imm = 0 too.
     return _with_flags(o, rd, (rn,), lambda d: [r.addi(d, rn, -imm)],
-                       lambda d: _sub_cv(rn, None, d, imm=imm))
+                       lambda d: _sub_cv(rn, None, d, imm=imm), flagged(r.addi(rd, rn, imm), SUB))
 
 
 @_handles("MOVS_imm")
 def _movs_imm(f, pc, o):
     rd = rv(f["d"])
+    if _c(o):
+        return [flagged(r.addi(rd, 0, f["i"]), NZ)]
     return _result(o, [r.addi(rd, 0, f["i"])], lambda: [r.addi(rd, 0, f["i"]), *_nz(rd)])
 
 
@@ -237,7 +270,7 @@ def _movs_imm(f, pc, o):
 def _cmp_imm(f, pc, o):
     rn, imm = rv(f["n"]), f["i"]
     return _with_flags(o, None, (), lambda d: [r.addi(d, rn, -imm)],
-                       lambda d: _sub_cv(rn, None, d, imm=imm))
+                       lambda d: _sub_cv(rn, None, d, imm=imm), flagged(r.addi(0, rn, imm), SUB))
 
 
 # --- Data processing (register) -------------------------------------------------
@@ -249,6 +282,8 @@ _LOGICAL = {"ANDS": r.and_, "EORS": r.xor, "ORRS": r.or_}
 def _logical(f, pc, o):
     rdn, rm = rv(f["d"]), rv(f["m"])
     op = _LOGICAL[f["_name"]](rdn, rdn, rm)
+    if _c(o):
+        return [flagged(op, NZ)]
     return _result(o, [op], lambda: [op, *_nz(rdn)])
 
 
@@ -256,24 +291,32 @@ def _logical(f, pc, o):
 def _bics(f, pc, o):
     rdn, rm = rv(f["d"]), rv(f["m"])
     ops = [r.xori(T1, rm, -1), r.and_(rdn, rdn, T1)]
+    if _c(o):
+        return [ops[0], flagged(ops[1], NZ)]
     return _result(o, ops, lambda: [*ops, *_nz(rdn)])
 
 
 @_handles("MVNS")
 def _mvns(f, pc, o):
     rd, rm = rv(f["d"]), rv(f["m"])
+    if _c(o):
+        return [flagged(r.xori(rd, rm, -1), NZ)]
     return _result(o, [r.xori(rd, rm, -1)], lambda: [r.xori(rd, rm, -1), *_nz(rd)])
 
 
 @_handles("MULS")
 def _muls(f, pc, o):
     rdm, rn = rv(f["d"]), rv(f["n"])
+    if _c(o):   # the product exists only in writeback: N, Z from a second op in execute
+        return [r.mul(rdm, rn, rdm), flagged(r.mv(rdm, rdm), NZ)]
     return _result(o, [r.mul(rdm, rn, rdm)], lambda: [r.mul(rdm, rn, rdm), *_nz(rdm)])
 
 
 @_handles("TST")
 def _tst(f, pc, o):
     rn, rm = rv(f["n"]), rv(f["m"])
+    if _c(o):
+        return [flagged(r.and_(0, rn, rm), NZ)]
     return _result(o, [r.nop()], lambda: [r.and_(T1, rn, rm), *_nz(T1)])
 
 
@@ -281,21 +324,21 @@ def _tst(f, pc, o):
 def _rsbs(f, pc, o):
     rd, rn = rv(f["d"]), rv(f["n"])
     return _with_flags(o, rd, (rn,), lambda d: [r.sub(d, 0, rn)],
-                       lambda d: _sub_cv(0, rn, d))
+                       lambda d: _sub_cv(0, rn, d), flagged(r.sub(rd, 0, rn), SUB))
 
 
 @_handles("CMP_reg")
 def _cmp_reg(f, pc, o):
     rn, rm = rv(f["n"]), rv(f["m"])
     return _with_flags(o, None, (), lambda d: [r.sub(d, rn, rm)],
-                       lambda d: _sub_cv(rn, rm, d))
+                       lambda d: _sub_cv(rn, rm, d), flagged(r.sub(0, rn, rm), SUB))
 
 
 @_handles("CMN")
 def _cmn(f, pc, o):
     rn, rm = rv(f["n"]), rv(f["m"])
     return _with_flags(o, None, (), lambda d: [r.add(d, rn, rm)],
-                       lambda d: _add_cv(rn, rm, d))
+                       lambda d: _add_cv(rn, rm, d), flagged(r.add(0, rn, rm), ADD))
 
 
 @_handles("ADCS")
@@ -303,6 +346,8 @@ def _adcs(f, pc, o):
     rdn, rm = rv(f["d"]), rv(f["m"])
     if _reads_flags(o):
         return [r.ILLEGAL]
+    if _c(o):
+        return [flagged(r.add(rdn, rdn, rm), ADC)]
     return _adc(rdn, rdn, rm)
 
 
@@ -311,6 +356,8 @@ def _sbcs(f, pc, o):
     rdn, rm = rv(f["d"]), rv(f["m"])
     if _reads_flags(o):
         return [r.ILLEGAL]
+    if _c(o):
+        return [flagged(r.sub(rdn, rdn, rm), SBC)]
     return [r.xori(T4, rm, -1), *_adc(rdn, rdn, T4)]
 
 
@@ -320,6 +367,15 @@ def _lsls_reg(f, pc, o):
     if o.flags == "none":   # zero for amounts of 32 and more
         return [r.andi(T1, rm, 255), r.sll(T4, rdn, T1), r.sltiu(T3, T1, 32), r.sub(T3, 0, T3),
                 r.and_(rdn, T4, T3)]
+    if _c(o):
+        return [
+            r.andi(T1, rm, 255),
+            # C candidate: bit (32 - amount) for amounts 1-32, 0 above 32.
+            r.sub(T2, 0, T1), r.srl(T2, rdn, T2), r.sltiu(T3, T1, 33), r.and_(T2, T2, T3),
+            *_c_if_nonzero(T2, T1),
+            r.sll(T4, rdn, T1), r.sltiu(T3, T1, 32), r.sub(T3, 0, T3),
+            flagged(r.and_(rdn, T4, T3), NZ),
+        ]
     return [
         r.andi(T1, rm, 255),           # ARM's amount: rm[7:0]
         # C candidate: bit (32 - amount) for amounts 1-32, 0 above 32.
@@ -345,6 +401,15 @@ def _lsrs_reg(f, pc, o):
     if o.flags == "none":
         return [r.andi(T1, rm, 255), r.srl(T4, rdn, T1), r.sltiu(T3, T1, 32), r.sub(T3, 0, T3),
                 r.and_(rdn, T4, T3)]
+    if _c(o):
+        return [
+            r.andi(T1, rm, 255),
+            # C candidate: bit (amount - 1) for amounts 1-32, 0 above 32.
+            r.addi(T2, T1, -1), r.srl(T2, rdn, T2), r.sltiu(T3, T1, 33), r.and_(T2, T2, T3),
+            *_c_if_nonzero(T2, T1),
+            r.srl(T4, rdn, T1), r.sltiu(T3, T1, 32), r.sub(T3, 0, T3),
+            flagged(r.and_(rdn, T4, T3), NZ),
+        ]
     return [
         r.andi(T1, rm, 255),
         # C candidate: bit (amount - 1) for amounts 1-32, 0 above 32.
@@ -369,6 +434,16 @@ def _asrs_reg(f, pc, o):
     if o.flags == "none":   # amounts of 32 and more behave as 31
         return [r.andi(T1, rm, 255), r.sltiu(T3, T1, 32), r.addi(T3, T3, -1), r.or_(T3, T1, T3),
                 r.sra(rdn, rdn, T3)]
+    if _c(o):
+        return [
+            r.andi(T1, rm, 255),
+            # C candidate: bit min(amount - 1, 31).
+            r.addi(T2, T1, -1), r.sltiu(T3, T2, 32), r.addi(T3, T3, -1), r.or_(T2, T2, T3),
+            r.srl(T2, rdn, T2), r.andi(T2, T2, 1),
+            *_c_if_nonzero(T2, T1),
+            r.sltiu(T3, T1, 32), r.addi(T3, T3, -1), r.or_(T3, T1, T3),
+            flagged(r.sra(rdn, rdn, T3), NZ),
+        ]
     return [
         r.andi(T1, rm, 255),
         # C candidate: bit min(amount - 1, 31). Saturate: OR with -1 if >= 32.
@@ -395,6 +470,14 @@ def _rors(f, pc, o):
     if o.flags == "none":
         return [r.andi(T3, rm, 31), r.srl(T4, rdn, T3), r.sub(T3, 0, T3), r.sll(T3, rdn, T3),
                 r.or_(rdn, T4, T3)]
+    if _c(o):   # the result first: C is its bit 31
+        return [
+            r.andi(T1, rm, 255),
+            r.andi(T3, T1, 31), r.srl(T4, rdn, T3), r.sub(T3, 0, T3), r.sll(T3, rdn, T3),
+            flagged(r.or_(rdn, T4, T3), NZ),
+            r.srli(T2, rdn, 31),
+            *_c_if_nonzero(T2, T1),
+        ]
     return [
         r.andi(T1, rm, 255),
         r.andi(T3, T1, 31),
@@ -428,7 +511,7 @@ def _cmp_hi(f, pc, o):
     if o.flags == "none":
         return [r.nop()]
     return read_n + read_m + _with_flags(o, None, (), lambda d: [r.sub(d, rn, rm)],
-                                         lambda d: _sub_cv(rn, rm, d))
+                                         lambda d: _sub_cv(rn, rm, d), flagged(r.sub(0, rn, rm), SUB))
 
 
 @_handles("MOV_hi")
@@ -689,7 +772,10 @@ def _cond_branch(cond, off):
 def _b_cond(f, pc, o):
     if _reads_flags(o):
         return [r.ILLEGAL]
-    return _cond_branch(f["c"], _sext(f["i"], 8) * 2 + 4)
+    off = _sext(f["i"], 8) * 2 + 4
+    if _c(o):
+        return [flagged(r.beq(0, 0, off), BRANCH, f["c"])]
+    return _cond_branch(f["c"], off)
 
 
 @_handles("UDF")
@@ -735,6 +821,8 @@ def _msr(f, pc, o):
     if sysm == _APSR:
         if _reads_flags(o):     # writes them, but without a flags unit there's nowhere to put them
             return [r.ILLEGAL]
+        if _c(o):
+            return [r.csrrw(0, r.NZCV, rn)]
         return [
             r.srli(FN, rn, 31),
             r.srli(FZ, rn, 30), r.andi(FZ, FZ, 1),
@@ -761,6 +849,8 @@ def _mrs(f, pc, o):
     if sysm == _APSR:
         if _reads_flags(o):
             return [r.ILLEGAL]
+        if _c(o):
+            return [r.csrrs(rd, r.NZCV, 0)]
         return [
             r.slli(T1, FN, 31),
             r.slli(T2, FZ, 30), r.or_(T1, T1, T2),

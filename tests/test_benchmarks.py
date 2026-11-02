@@ -33,9 +33,10 @@ def test_coremark_model(build_bench):
 
 
 @pytest.mark.slow
-def test_coremark_lockstep(build_bench):
+@pytest.mark.parametrize("flags", ["A", "C"])
+def test_coremark_lockstep(build_bench, flags):
     image = elf.load(build_bench.coremark())
-    check_coremark(lockstep.run([image], stop=image.symbols["done"]), image)
+    check_coremark(lockstep.run([image], stop=image.symbols["done"], flags=flags), image)
 
 
 def check_embench(result, name):
@@ -43,23 +44,26 @@ def check_embench(result, name):
     assert result.final_regs[0] == 0, f"{name}: benchmark did not verify"
 
 
+@pytest.mark.parametrize("flags", ["A", "C"])
 @pytest.mark.parametrize("name", SMALL)
-def test_embench_lockstep_small(build_bench, name):
+def test_embench_lockstep_small(build_bench, name, flags):
     image = elf.load(build_bench.embench(name))
-    check_embench(lockstep.run([image], stop=image.symbols["done"]), name)
+    check_embench(lockstep.run([image], stop=image.symbols["done"], flags=flags), name)
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("flags", ["A", "C"])
 @pytest.mark.parametrize("name", MEDIUM)
-def test_embench_lockstep(build_bench, name):
+def test_embench_lockstep(build_bench, name, flags):
     image = elf.load(build_bench.embench(name))
-    check_embench(lockstep.run([image], stop=image.symbols["done"]), name)
+    check_embench(lockstep.run([image], stop=image.symbols["done"], flags=flags), name)
 
 
 @pytest.mark.slow
-def test_float_kernels_lockstep(build_bench):
+@pytest.mark.parametrize("flags", ["A", "C"])
+def test_float_kernels_lockstep(build_bench, flags):
     image = elf.load(build_bench.float_kernels())
-    result = lockstep.run([image], stop=image.symbols["done"], max_steps=1_000_000)
+    result = lockstep.run([image], stop=image.symbols["done"], max_steps=1_000_000, flags=flags)
     assert result.ok, f"{result.stopped}\n{result.divergence}"
 
 

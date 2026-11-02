@@ -142,6 +142,7 @@ PROGRAMS = {
     "blinky": ([], ["blinky.c"], None),
     "leaf": (["thumb_leaf.c"], ["thumb_leaf_main.c"], None),               # 2.4: RISC-V calls Thumb
     "callback": (["callback.c"], ["callback_main.c"], "callback.h"),     # 3.5: and back
+    "loops": (["loops.c"], ["loops_main.c", "loops_run.c"], None),       # 4.4: loops and conditions
 }
 
 

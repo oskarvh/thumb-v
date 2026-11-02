@@ -11,8 +11,9 @@
 //   +irq=<seed>     raise the timer interrupt again and again, see below
 //
 // The UART line is decoded here and printed to stdout. The run ends when the
-// core retires `j .` (0x0000006f), the loop the startup code spins in at
-// `done`; the testbench waits for the UART to finish sending, then prints
+// core retires `j .` (0x0000006f) or Thumb's `b .` (0xe7fe, a halfword no
+// 32-bit RISC-V instruction starts with), the loops the startup code spins in
+// at `done`; the testbench waits for the UART to finish sending, then prints
 // "EXIT <a0> <cycles> <instructions>" (cycles and instructions up to `done`).
 //
 // Trace lines, all hex: pc insn rd rd_wdata mem_addr mem_rmask mem_wmask
@@ -78,13 +79,14 @@ module tb #(
             if (dut.cpu.rvfi_rd_addr == 10)
                 a0 <= dut.cpu.rvfi_rd_wdata;
             if (trace_fd != 0)
-                $fdisplay(trace_fd, "%h %h %h %h %h %h %h %h %h %h",
+                $fdisplay(trace_fd, "%h %h %h %h %h %h %h %h %h %h %h",
                           dut.cpu.rvfi_pc_rdata, dut.cpu.rvfi_insn,
                           dut.cpu.rvfi_rd_addr, dut.cpu.rvfi_rd_wdata,
                           dut.cpu.rvfi_mem_addr, dut.cpu.rvfi_mem_rmask,
                           dut.cpu.rvfi_mem_wmask, dut.cpu.rvfi_mem_rdata,
-                          dut.cpu.rvfi_mem_wdata, dut.cpu.rvfi_trap);
-            if (dut.cpu.rvfi_insn == 32'h0000006f)
+                          dut.cpu.rvfi_mem_wdata, dut.cpu.rvfi_trap,
+                          dut.cpu.thumbNzcv);         // NZCV after the op (ThumbFlagsPlugin)
+            if (dut.cpu.rvfi_insn == 32'h0000006f || dut.cpu.rvfi_insn[15:0] == 16'he7fe)
                 done <= 1;
         end
         if (cycles >= max_cycles)

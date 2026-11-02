@@ -214,6 +214,7 @@ abstract class ThumbFetcherImpl(var resetVector : BigInt,
       val thumb = Bool()          // THUMBV: a Thumb instruction; rsp.inst is its first op
       val raw = Bits(32 bits)     // THUMBV: the instruction as fetched, for the sequencer
       val last0 = Bool()          // THUMBV: op 0 is the expansion's last
+      val side0 = Bits(8 bits)    // THUMBV: op 0's flags side-band (0 for RISC-V)
     }
 
 
@@ -308,6 +309,7 @@ abstract class ThumbFetcherImpl(var resetVector : BigInt,
       val first = Thumb.expand(raw(15 downto 0), raw(31 downto 16), False, U(0, 4 bits))
       output.rsp.inst := thumb ? first.op | (isRvc ? decompressed | raw)
       output.last0 := first.last  // THUMBV
+      output.side0 := thumb ? first.side | B(0, 8 bits)   // THUMBV
       input.ready := output.ready && (!iBusRsp.stages.last.input.valid || flushNext || (!(bufferValid && isInputHighRvc) && !(aligned && isInputLowRvc && isInputHighRvc)))
 
       when(output.fire){
@@ -400,8 +402,10 @@ abstract class ThumbFetcherImpl(var resetVector : BigInt,
         // stalls decode: expanding into either was the critical path.
         val nextOp = Reg(Bits(32 bits))
         val nextLast = Reg(Bool())
+        val nextSide = Reg(Bits(8 bits))
         val op = (step === 0) ? decodeInput.rsp.inst | nextOp
         val opLast = (step === 0) ? decodeInput.last0 | nextLast
+        val side = (step === 0) ? decodeInput.side0 | nextSide   // the flags side-band (Phase 4)
         // Hold only while valid: the stages pass ready straight through, so an
         // empty register must still say ready.
         val last = !thumb || opLast
@@ -409,6 +413,7 @@ abstract class ThumbFetcherImpl(var resetVector : BigInt,
         when(decode.arbitration.isFiring && !last) {
           nextOp := next.op
           nextLast := next.last
+          nextSide := next.side
         }
         when(decode.arbitration.isRemoved) { step := 0 }
         if (decodePcGen) decodePc.injectedDecode setWhen(!last)
@@ -421,6 +426,7 @@ abstract class ThumbFetcherImpl(var resetVector : BigInt,
       decode.arbitration.isValid := decodeInput.valid
       decode.insert(PC) := (if (decodePcGen) decodePc.pcReg else decodeInput.pc)
       decode.insert(INSTRUCTION) := sequencer.op   // THUMBV: op 0 is decodeInput.rsp.inst, for RISC-V too
+      decode.insert(ThumbFlagsPlugin.SIDE) := sequencer.thumb ? sequencer.side | B(0, 8 bits)   // THUMBV
       if (compressedGen) decode.insert(IS_RVC) := decodeInput.isRvc
       // THUMBV: the register file reads one cycle early: the next op of this
       // Thumb instruction, or after its last op, the next instruction's first.

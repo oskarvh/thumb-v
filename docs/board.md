@@ -6,6 +6,7 @@ Thumb-V runs on the Trenz CYC1000 (Cyclone 10 LP `10CL025YU256C8G`, 12 MHz oscil
 make board                      # hello world
 make board PROGRAM=leaf         # RISC-V calls gcc-compiled Thumb functions (Phase 2.4)
 make board PROGRAM=callback     # ...and Thumb calls back into RISC-V (Phase 3.5)
+make board PROGRAM=loops        # gcc-compiled Thumb loops and conditions (Phase 4.4)
 make board PROGRAM=blinky       # counts on the LEDs, forever
 make board ELF="a.elf b.elf"    # any program built with tests/link/rv32.ld (and thumb_lib.ld)
 ```
@@ -62,4 +63,5 @@ The FPGA's configuration is SRAM, so the board forgets the program at power-off.
 - `tests/c/hello.c` prints "Hello from Thumb-V" and sets the LEDs to `0xA5`.
 - `tests/c/blinky.c` counts on the LEDs and prints the count about 3 times a second, forever (`PROGRAM=blinky`).
 - `tests/c/thumb_leaf_main.c` calls the gcc-compiled leaf Thumb functions in `tests/c/thumb_leaf.c` and prints their results (`PROGRAM=leaf`). The LEDs show the low byte of the results' sum, `0x9d`.
+- `tests/c/loops_main.c` and `tests/c/loops_run.c` call the gcc-compiled Thumb functions in `tests/c/loops.c`, all loops and conditions: CRC-32, a sort, a binary search, GCD, a population count, 64-bit Fibonacci and dot product, a chain of comparisons, `strcmp`, an integer square root (`PROGRAM=loops`). It prints each result and a checksum, `9f3e3f8e`, the same as in simulation.
 - `tests/c/callback_main.c` and `tests/c/callback.c` call each other through the interface header `tests/c/callback.h` (`PROGRAM=callback`): Thumb code calls two RISC-V functions, reads a table through a literal pool and hands RISC-V a string to print.

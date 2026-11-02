@@ -3,9 +3,9 @@ instruction at both PC alignments and a large sweep of the 32-bit ones, op by
 op through each expansion.
 
 The rule (rtl/core/src/main/scala/thumbv/Thumb.scala): op k of the RTL's
-expansion is op k of the model's (Options(flags="none"), the hardware's mode
-until its flags unit), bit for bit, and `last` marks the model's last op, for
-every instruction. Neither op 0 nor the expansion's length
+expansion is op k of the model's (rtlsim.HARDWARE: strategy C, with the
+instructions that read flags still illegal), bit for bit, flags side-band
+included, and `last` marks the model's last op, for every instruction. Neither op 0 nor the expansion's length
 may depend on the PC's alignment, because the fetcher expands op 0 and
 decides whether it's the last before the alignment is known.
 """
@@ -20,12 +20,12 @@ from thumbv.build import ToolMissing
 
 from conftest import REQUIRE_RTL
 
-NONE = expander.Options(flags="none")
+HARDWARE = rtlsim.HARDWARE
 BASE = 0x1_4000
 
 def expected(hw1, hw2, pc1):
     """The RTL's expansion: [(op, last), ...]."""
-    e = expander.expand(hw1, hw2, BASE + 2 * pc1, NONE)
+    e = expander.expand(hw1, hw2, BASE + 2 * pc1, HARDWARE)
     return [(op, k == len(e.ops) - 1) for k, op in enumerate(e.ops)]
 
 
@@ -77,8 +77,8 @@ def check(instructions, alignments, tmp_path):
     wrong = [(q, g, w) for q, g, w in zip(queries, got, wanted) if g != w]
     report = "\n".join(
         f"{hw1:04x} {hw2:04x} pc1={pc1} step={step} "
-        f"{expander.expand(hw1, hw2, BASE + 2 * pc1, NONE).name:10} "
-        f"RTL {g[0]:08x}{' last' if g[1] else ''}, model {w[0]:08x}{' last' if w[1] else ''}"
+        f"{expander.expand(hw1, hw2, BASE + 2 * pc1, HARDWARE).name:10} "
+        f"RTL {g[0]:010x}{' last' if g[1] else ''}, model {w[0]:010x}{' last' if w[1] else ''}"
         for (hw1, hw2, pc1, step), g, w in wrong[:20])
     assert not wrong, f"{len(wrong)} of {len(queries)} ops differ:\n{report}"
     return got

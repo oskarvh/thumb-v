@@ -2,7 +2,7 @@
 
 Phase 0.7 measures what each way of handling ARM's NZCV flags would cost on real compiled code, to settle decision D1 in [plan.md](plan.md), and answers Q3 (register shifts) from [isa-coverage.md](isa-coverage.md) along the way.
 
-**Decided (2026-10-31): strategy C, a plain hardware NZCV unit,** with no further custom hardware: no fused compare-and-branch and no ARM-shift micro-op (Q3) for now, to keep the core changes minimal. Over 21 programs, C costs 1.25 RV32 ops per Thumb instruction (1.03 with both additions, which stay documented options). Eager software flags (A) cost 3.92. The best software scheme that hardware could realistically implement costs 2.34. Even a perfect, unrealisable dead-flag elimination costs 1.47, which is still worse than plain C.
+**Decided (2026-10-31): strategy C, a plain hardware NZCV unit,** with no further custom hardware: no fused compare-and-branch and no ARM-shift micro-op (Q3) for now, to keep the core changes minimal. Over 21 programs, C costs 1.25 RV32 ops per Thumb instruction (1.05 with both additions, which stay documented options). Eager software flags (A) cost 3.92. The best software scheme that hardware could realistically implement costs 2.34. Even a perfect, unrealisable dead-flag elimination costs 1.47, which is still worse than plain C.
 
 ## How it was measured
 
@@ -31,28 +31,28 @@ RV32 ops per Thumb instruction (the mean is unweighted, so the longest benchmark
 
 | Benchmark | Thumb instr. | A | A peek-1 | A peek-4 | A oracle | A fused | B | C | C fused | C shift |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| coremark | 423,292 | 4.02 | 3.01 | 2.44 | 1.36 | 1.02 | 2.68 | 1.13 | 1.01 | 0.98 |
-| float | 252,421 | 4.25 | 2.83 | 2.24 | 1.52 | 1.17 | 2.99 | 1.21 | 1.13 | 1.03 |
-| aha-mont64 | 20,459 | 4.08 | 2.70 | 2.01 | 1.38 | 1.32 | 3.07 | 1.04 | 1.01 | 1.01 |
-| crc32 | 24,657 | 3.21 | 2.21 | 1.50 | 1.21 | 1.13 | 2.58 | 1.17 | 1.13 | 1.13 |
-| depthconv | 4,664 | 4.37 | 3.30 | 2.19 | 1.50 | 1.33 | 3.01 | 1.53 | 1.49 | 1.15 |
-| edn | 50,415 | 4.59 | 2.87 | 2.11 | 1.32 | 1.18 | 3.05 | 1.25 | 1.21 | 1.12 |
-| huffbench | 291,047 | 4.23 | 3.04 | 2.42 | 1.33 | 0.95 | 2.61 | 1.08 | 0.95 | 0.91 |
-| matmult-int | 126,107 | 4.89 | 3.68 | 2.43 | 1.42 | 1.13 | 3.12 | 1.08 | 0.94 | 0.93 |
-| md5sum | 44,095 | 4.23 | 3.01 | 2.53 | 1.40 | 1.16 | 2.81 | 1.37 | 1.35 | 0.99 |
-| nettle-aes | 90,525 | 3.44 | 2.57 | 1.68 | 1.16 | 1.12 | 2.69 | 1.12 | 1.11 | 1.08 |
-| nettle-sha256 | 13,527 | 3.54 | 2.91 | 2.22 | 1.40 | 1.38 | 2.72 | 2.07 | 2.06 | 1.04 |
+| coremark | 423,292 | 4.02 | 3.01 | 2.44 | 1.36 | 1.02 | 2.68 | 1.15 | 1.03 | 1.00 |
+| float | 252,421 | 4.25 | 2.83 | 2.24 | 1.52 | 1.17 | 2.99 | 1.21 | 1.13 | 1.05 |
+| aha-mont64 | 20,459 | 4.08 | 2.70 | 2.01 | 1.38 | 1.32 | 3.07 | 1.05 | 1.02 | 1.02 |
+| crc32 | 24,657 | 3.21 | 2.21 | 1.50 | 1.21 | 1.13 | 2.58 | 1.21 | 1.17 | 1.17 |
+| depthconv | 4,664 | 4.37 | 3.30 | 2.19 | 1.50 | 1.33 | 3.01 | 1.52 | 1.48 | 1.22 |
+| edn | 50,415 | 4.59 | 2.87 | 2.11 | 1.32 | 1.18 | 3.05 | 1.37 | 1.34 | 1.25 |
+| huffbench | 291,047 | 4.23 | 3.04 | 2.42 | 1.33 | 0.95 | 2.61 | 1.07 | 0.95 | 0.91 |
+| matmult-int | 126,107 | 4.89 | 3.68 | 2.43 | 1.42 | 1.13 | 3.12 | 1.14 | 1.00 | 1.00 |
+| md5sum | 44,095 | 4.23 | 3.01 | 2.53 | 1.40 | 1.16 | 2.81 | 1.31 | 1.28 | 0.99 |
+| nettle-aes | 90,525 | 3.44 | 2.57 | 1.68 | 1.16 | 1.12 | 2.69 | 1.12 | 1.10 | 1.08 |
+| nettle-sha256 | 13,527 | 3.54 | 2.91 | 2.22 | 1.40 | 1.38 | 2.72 | 1.81 | 1.81 | 1.04 |
 | nsichneu | 3,023 | 2.95 | 2.92 | 2.90 | 1.99 | 0.89 | 1.69 | 1.02 | 0.89 | 0.81 |
-| picojpeg | 766,493 | 3.73 | 2.73 | 1.93 | 1.35 | 1.20 | 2.58 | 1.24 | 1.22 | 1.14 |
-| qrduino | 699,989 | 4.17 | 3.59 | 2.71 | 1.53 | 1.22 | 2.69 | 1.76 | 1.68 | 1.02 |
+| picojpeg | 766,493 | 3.73 | 2.73 | 1.93 | 1.35 | 1.20 | 2.58 | 1.26 | 1.23 | 1.16 |
+| qrduino | 699,989 | 4.17 | 3.59 | 2.71 | 1.53 | 1.22 | 2.69 | 1.66 | 1.58 | 1.04 |
 | sglib-combined | 108,521 | 3.88 | 3.29 | 2.86 | 1.68 | 1.09 | 2.48 | 1.18 | 1.02 | 1.00 |
 | slre | 26,838 | 3.80 | 3.22 | 2.86 | 1.85 | 1.23 | 2.43 | 1.21 | 1.14 | 1.06 |
 | statemate | 1,586 | 3.57 | 3.05 | 2.56 | 1.43 | 1.23 | 2.42 | 1.30 | 1.22 | 1.18 |
-| tarfind | 82,171 | 5.23 | 3.46 | 2.81 | 1.64 | 1.33 | 3.47 | 1.03 | 0.87 | 0.87 |
-| ud | 2,510 | 4.36 | 2.92 | 2.35 | 1.34 | 1.06 | 2.76 | 1.12 | 1.01 | 1.00 |
+| tarfind | 82,171 | 5.23 | 3.46 | 2.81 | 1.64 | 1.33 | 3.47 | 1.04 | 0.88 | 0.87 |
+| ud | 2,510 | 4.36 | 2.92 | 2.35 | 1.34 | 1.06 | 2.76 | 1.16 | 1.05 | 1.03 |
 | wikisort | 818,325 | 3.38 | 2.61 | 2.14 | 1.44 | 1.06 | 2.32 | 1.17 | 1.06 | 1.06 |
 | xgboost | 4,282,396 | 2.43 | 2.38 | 2.30 | 1.58 | 1.16 | 1.84 | 1.26 | 1.16 | 1.16 |
-| **mean** | | **3.92** | **2.97** | **2.34** | **1.47** | **1.16** | **2.67** | **1.25** | **1.17** | **1.03** |
+| **mean** | | **3.92** | **2.97** | **2.34** | **1.47** | **1.16** | **2.67** | **1.25** | **1.17** | **1.05** |
 
 Values below 1 occur because a fused compare-and-branch retires two Thumb instructions as one op.
 
@@ -69,7 +69,7 @@ Values below 1 occur because a fused compare-and-branch retires two Thumb instru
 - **Even perfect elimination isn't enough.** The oracle (1.47) is still worse than plain C (1.25), because the flags that are read cost 7–9 ops each time a compare feeds a branch.
 - **Lazy flags pay on every write.** B (2.67) saves operands on every flag-setting instruction, which is about as costly as computing N and Z eagerly. Even with its read side idealised, it lands between A peek-1 and A peek-4. It would also be the most complex expander of all.
 - **C is close to native.** What C has left above 1.0 is the inherent multi-op instructions: `PUSH`/`POP`, register-offset loads, `LDR` literal and hi-register forms.
-- **The outlier is register shifts, not flags.** C's worst cases are `nettle-sha256` (2.07), `qrduino` (1.76) and `md5sum` (1.37): `RORS` and `ASRS` by register with C computed in software. The ARM-shift micro-op brings all three to about 1.0 (Q3 below).
+- **The outlier is register shifts, not flags.** C's worst cases are `nettle-sha256` (1.81), `qrduino` (1.66) and `edn` (1.37): `RORS` and `ASRS` by register with C computed in software. The ARM-shift micro-op brings the first two to about 1.0 (Q3 below); `edn` is `MULS`, which costs two ops under C (Phase 4).
 
 ### Checks on the method
 
@@ -111,10 +111,10 @@ None of the 17,780 `BL`s executed (822 static) needs the 2-op `auipc` + `jalr` f
   | exactly 32 | none |
 
   The ≥ 32 cases are rare but real, so the special-casing has to stay.
-- **Cost under C.** The 5-op result expansion in isa-coverage.md assumed software flags. Under C, the flags unit still needs the shifter's carry-out, which RISC-V's `sll`/`srl`/`sra` don't produce. Computing C in software keeps register shifts at 13–17 ops, and that is what makes `nettle-sha256` cost 2.07.
+- **Cost under C.** The 5-op result expansion in isa-coverage.md assumed software flags. Under C, the flags unit still needs the shifter's carry-out, which RISC-V's `sll`/`srl`/`sra` don't produce. Computing C in software keeps register shifts at 10–14 ops (Phase 4's real expansions), and that is what makes `nettle-sha256` cost 1.81.
 - **With the micro-op.** The ARM-shift micro-op from isa-coverage.md produces the ARM result and hands its carry-out to the flags unit in one op. Over all programs that is 0.12 ops per instruction (1.15 → 1.03). On the crypto and qrduino code it is the difference between about 2.0 and 1.0.
 
-**Decision for Q3: no ARM-shift micro-op for now.** Register shifts use the 5-op result expansion and compute C in software, then write it into the flags unit: 13–17 ops each, which is already included in C's 1.25. The micro-op stays a documented option for Phase 7, where it would mainly help crypto-style code (SHA-256 2.07 → 1.04, qrduino 1.76 → 1.02).
+**Decision for Q3: no ARM-shift micro-op for now.** Register shifts use the 5-op result expansion and compute C in software, then write it into the flags unit: 10–14 ops each, which is already included in C's 1.25. The micro-op stays a documented option for Phase 7, where it would mainly help crypto-style code (SHA-256 1.81 → 1.04, qrduino 1.66 → 1.04).
 
 ## Decision
 
@@ -143,7 +143,7 @@ Consequences:
 - **One compiler, one input.** GCC 13 at `-O2` only; other compilers (Clang, Arm Compiler) schedule flags differently. Each benchmark runs once with one input.
 - **Ops, not cycles.** Loads, taken branches and multi-cycle ops cost the same under every strategy, so they don't change the ranking, but the absolute numbers aren't cycle counts.
 - **B is optimistic.** Its read side assumes the producer's kind is known for free. The real number would be higher, which only strengthens the conclusion.
-- **Assumptions behind C.** Two C-family costs are assumptions rather than expansions the model emits. Without the micro-op, a register shift is costed as A's expansion minus the two N/Z ops. Fused `CMP #imm` with imm ≠ 0 is costed as one op, assuming an immediate form exists. Phase 4 replaces these with real expansions.
+- **C is costed from real expansions** since Phase 4.1: the length of each instruction's expansion under `Options(flags="C")`. Before, a register shift was assumed to cost A's expansion minus the two N/Z ops, and every flag-setting instruction one op. The mean didn't move (1.25): register shifts got cheaper (10–14 ops instead of 13–17), and `MULS` costs two ops, because the product only exists in writeback while the flags unit works in execute. The fused and micro-op columns still rest on assumptions: fused `CMP #imm` with imm ≠ 0 as one op, and a register shift with the micro-op as one op.
 
 ## Reproducing
 
