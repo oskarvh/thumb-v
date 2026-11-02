@@ -79,8 +79,8 @@ def build_asm(tmp_path):
 
 @pytest.fixture
 def build_c(tmp_path):
-    """Build a C program from tests/c/: build_c("thumb", "prog.c")."""
-    return _tools(lambda kind, *names: build.c_program(kind, names, tmp_path))
+    """Build a C program from tests/c/: build_c("thumb", "prog.c"), firmware=True to link firmware/."""
+    return _tools(lambda kind, *names, firmware=False: build.c_program(kind, names, tmp_path, firmware))
 
 
 @pytest.fixture
@@ -97,9 +97,10 @@ def build_thumb_asm(tmp_path):
 
 @pytest.fixture
 def build_mixed(tmp_path):
-    """Build a mixed program: build_mixed(["lib.c"], ["main.c"], interface=None) -> (rv_elf, thumb_elf)."""
-    return _tools(lambda thumb_names, rv_names, interface=None:
-                  build.mixed_program(thumb_names, rv_names, tmp_path, interface))
+    """Build a mixed program: build_mixed(["lib.c"], ["main.c"], interface=None, firmware=False)
+    -> (rv_elf, thumb_elf)."""
+    return _tools(lambda thumb_names, rv_names, interface=None, firmware=False:
+                  build.mixed_program(thumb_names, rv_names, tmp_path, interface, firmware))
 
 
 @pytest.fixture

@@ -464,6 +464,70 @@ def test_interrupt_controller(rtl_simulator, build_c, tmp_path):
     assert words("active_seen", n) == words("claimed", n)       # VECTACTIVE while active
 
 
+def uart_values(uart):
+    """{label: value} from lines "label: hex"."""
+    out = {}
+    for line in uart.splitlines():
+        label, _, value = line.rpartition(":")
+        if label:
+            out[label.strip()] = int(value, 16)
+    return out
+
+
+def test_firmware_interrupts(rtl_simulator, build_mixed, tmp_path):
+    """Phase 5.3: the firmware's entry routine (firmware/), in lockstep:
+    a Thumb SysTick handler (compiled for Cortex-M0) interrupting RISC-V
+    code, a RISC-V one interrupting Thumb code, and a Thumb one that changes
+    the flags interrupting Thumb code (NZCV saved: without it, checked by
+    hand, the third result is wrong); preemption by priority and PendSV;
+    SVC from Thumb and ecall from RISC-V; the interrupt latency."""
+    rv_elf, thumb_elf = build_mixed(["irq_mixed_thumb.c"], ["irq_mixed_main.c"], firmware=True)
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    assert result.status == "EXIT"
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    v = uart_values(result.uart)
+    assert v["thumb handler, riscv code"] == v["riscv handler, thumb code"] == v["thumb handler, thumb code"] == 1
+    # Enough interrupts in each case (the labels repeat, so read them all).
+    ticks = [int(line.rpartition(":")[2], 16) for line in result.uart.splitlines() if "ticks" in line]
+    assert len(ticks) == 3 and min(ticks) > 100, ticks
+    # Interrupt 1 enters, 2 preempts it, 1 leaves; then 3 (same priority as 1) and PendSV.
+    assert v["order (12345)"] == 0x12345
+    assert v["svc #1 (20, 22)"] == 42 and v["svc #2 (6, 7)"] == 42 and v["ecall 1 (100, 23)"] == 123
+    # From SysTick pending to the C handler's first load: 80 cycles in 5.3.
+    assert v["latency (cycles)"] <= 90, v["latency (cycles)"]
+
+
+def test_firmware_faults(rtl_simulator, build_mixed, tmp_path):
+    """Phase 5.3: the firmware's default reports: BKPT (Thumb) and ebreak
+    (RISC-V) reported and resumed, then a Thumb load fault reported and the
+    program stopped."""
+    rv_elf, thumb_elf = build_mixed(["trap_lib.S"], ["fault_main.c"], firmware=True)
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    assert result.status == "EXIT"
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    fn = lambda name: images[1].functions[name] & ~1
+    lines = result.uart.splitlines()
+    assert lines[0] == f"thumbv: breakpoint at {fn('t_bkpt'):08x} (Thumb), mtval 00100073"
+    assert lines[1].startswith("thumbv: breakpoint at ") and lines[1].endswith("(RISC-V), mtval 00100073")
+    assert lines[2] == f"thumbv: load access fault at {fn('t_load'):08x} (Thumb), mtval 30000000"
+    assert len(lines) == 3
+
+
+def test_firmware_systick_tick(rtl_simulator, build_mixed, tmp_path):
+    """Phase 5.3: the board's SysTick program, simulated for its first two
+    ticks (10 Hz on the board's 12 MHz clock: 1.2 million cycles each)."""
+    rv_elf, thumb_elf = build_mixed(["tick_thumb.c"], ["tick_main.c"], firmware=True)
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = rtlsim.run(images, tmp_path, max_cycles=2_500_000, trace=False)
+    assert result.status == "TIMEOUT"                 # it runs forever
+    assert result.uart.splitlines()[:3] == ["SysTick at 10 Hz, Thumb handler", "tick 00000001",
+                                            "tick 00000002"]
+
+
 def thumb_region(images, addr):
     return any(lo <= addr < hi for img in images if img.is_thumb for lo, hi in img.code_ranges())
 

@@ -5,9 +5,10 @@ the ELF paths. Missing cross toolchains raise ToolMissing.
 
 Memory layout of the programs (see tests/link/):
   Thumb programs        code 0x0001_0000, data 0x2000_0000 (48 KiB)
-  Thumb libraries       code 0x0001_4000, data 0x2000_0000 (16 KiB)   for mixed programs:
+  Thumb libraries       code 0x0001_4000, data 0x2000_0000 (8 KiB)    for mixed programs:
                         the Thumb window, Thumb region 0 (set by crt_rv32.S)
-  RV32 programs         code 0x0002_0000, data 0x2000_4000 (16 KiB)
+  RV32 programs         code 0x0002_0000, data 0x2000_2000 (24 KiB; on the board's 16 KiB
+                        RAM, the second 8 KiB, under the stack)
                         a jump to _start at 0x0002_0000 (the core's reset vector), then
                         the import jump table for Thumb code, at IMPORT_BASE
   Stack                 top at 0x2001_0000, shared
@@ -22,6 +23,9 @@ from . import elf, interwork
 
 REPO = Path(__file__).resolve().parents[2]
 C_DIR = REPO / "tests" / "c"
+FIRMWARE_DIR = REPO / "firmware"
+# The shared trap entry routine and its C side (Phase 5.3), for RISC-V programs.
+FIRMWARE = [FIRMWARE_DIR / "thumbv_entry.S", FIRMWARE_DIR / "thumbv.c"]
 LINK_DIR = REPO / "tests" / "link"
 BENCH_DIR = REPO / "tests" / "bench"
 COREMARK = REPO / "third_party" / "coremark"
@@ -61,12 +65,13 @@ def _linker_script(name):
     return f"-Wl,-T,{LINK_DIR / name}"
 
 
-def c_program(kind: str, names, out_dir: Path) -> Path:
-    """A C program from tests/c/ with its startup file (set SP, call main, spin at `done`)."""
-    sources = [C_DIR / f"crt_{kind}.S", *(C_DIR / n for n in names)]
+def c_program(kind: str, names, out_dir: Path, firmware: bool = False) -> Path:
+    """A C program from tests/c/ with its startup file (set SP, call main, spin at `done`).
+    `firmware` (RISC-V only): link the trap entry routine from firmware/."""
+    sources = [C_DIR / f"crt_{kind}.S", *(C_DIR / n for n in names), *(FIRMWARE if firmware else [])]
     out = out_dir / (Path(names[0]).stem + ".elf")
-    return compile_and_link(kind, sources, out, [*C_FLAGS[kind], _linker_script(f"{kind}.ld")],
-                            ["-lgcc"])
+    return compile_and_link(kind, sources, out, [*C_FLAGS[kind], f"-I{FIRMWARE_DIR}",
+                                                 _linker_script(f"{kind}.ld")], ["-lgcc"])
 
 
 def thumb_asm_program(source: Path, out: Path) -> Path:
@@ -74,7 +79,8 @@ def thumb_asm_program(source: Path, out: Path) -> Path:
     return compile_and_link("thumb", [source], out, [_linker_script("thumb.ld")])
 
 
-def mixed_program(thumb_names, rv_names, out_dir: Path, interface: str | None = None) -> tuple[Path, Path]:
+def mixed_program(thumb_names, rv_names, out_dir: Path, interface: str | None = None,
+                  firmware: bool = False) -> tuple[Path, Path]:
     """A Thumb library from tests/c/, then a RISC-V program linked against it.
 
     Without an interface header, the library's global functions become
@@ -86,10 +92,12 @@ def mixed_program(thumb_names, rv_names, out_dir: Path, interface: str | None = 
     With an interface header (from tests/c/, see thumbv/interwork.py), only the
     declared functions cross: thunks are generated where the ABIs differ, and
     Thumb code can call the declared RISC-V functions by name through the
-    import jump table. Returns (rv_elf, thumb_elf).
+    import jump table. `firmware` links the trap entry routine from firmware/
+    into the RISC-V side (Phase 5.3); both sides can include its headers.
+    Returns (rv_elf, thumb_elf).
     """
     thumb_sources = [C_DIR / n for n in thumb_names]
-    rv_sources = [C_DIR / "crt_rv32.S", *(C_DIR / n for n in rv_names)]
+    rv_sources = [C_DIR / "crt_rv32.S", *(C_DIR / n for n in rv_names), *(FIRMWARE if firmware else [])]
     gen = None
     if interface:
         gen = interwork.generate(interwork.parse((C_DIR / interface).read_text()), IMPORT_BASE)
@@ -100,7 +108,7 @@ def mixed_program(thumb_names, rv_names, out_dir: Path, interface: str | None = 
 
     thumb = compile_and_link(
         "thumb", thumb_sources, out_dir / "lib_thumb.elf",
-        [*C_FLAGS["thumb"], _linker_script("thumb_lib.ld"), "-Wl,--entry=0"], ["-lgcc"])
+        [*C_FLAGS["thumb"], f"-I{FIRMWARE_DIR}", _linker_script("thumb_lib.ld"), "-Wl,--entry=0"], ["-lgcc"])
     functions = elf.load(thumb).functions
     if gen:
         exports = {gen.export_symbols[name]: functions[name] for name in gen.export_symbols}
@@ -109,7 +117,7 @@ def mixed_program(thumb_names, rv_names, out_dir: Path, interface: str | None = 
     defsyms = [f"-Wl,--defsym={name}={value & ~1:#x}" for name, value in exports.items()]
     rv = compile_and_link(
         "rv32", rv_sources, out_dir / "main_rv32.elf",
-        [*C_FLAGS["rv32"], _linker_script("rv32.ld"), *defsyms], ["-lgcc"])
+        [*C_FLAGS["rv32"], f"-I{FIRMWARE_DIR}", _linker_script("rv32.ld"), *defsyms], ["-lgcc"])
     if gen:  # the Thumb side was linked against the table's slots at IMPORT_BASE
         table = elf.load(rv).symbols.get("__thumbv_imports")
         if table != IMPORT_BASE:

@@ -143,6 +143,7 @@ PROGRAMS = {
     "leaf": (["thumb_leaf.c"], ["thumb_leaf_main.c"], None),               # 2.4: RISC-V calls Thumb
     "callback": (["callback.c"], ["callback_main.c"], "callback.h"),     # 3.5: and back
     "loops": (["loops.c"], ["loops_main.c", "loops_run.c"], None),       # 4.4: loops and conditions
+    "tick": (["tick_thumb.c"], ["tick_main.c"], None),                   # 5.3: a Thumb SysTick handler
 }
 
 
@@ -151,9 +152,9 @@ def build_program(name: str) -> list[Path]:
     thumb, rv, interface = PROGRAMS[name]
     out = BOARD_DIR / name
     out.mkdir(parents=True, exist_ok=True)
-    if thumb:
-        return list(recipes.mixed_program(thumb, rv, out, interface))
-    return [recipes.c_program("rv32", rv, out)]
+    if thumb:   # the firmware (Phase 5.3) costs nothing unless a program calls it
+        return list(recipes.mixed_program(thumb, rv, out, interface, firmware=True))
+    return [recipes.c_program("rv32", rv, out, firmware=True)]
 
 
 def main(argv=None):

@@ -8,7 +8,7 @@ ENTRY(_start)
 MEMORY
 {
     ROM (rx)  : ORIGIN = 0x00014000, LENGTH = 48K
-    RAM (rwx) : ORIGIN = 0x20000000, LENGTH = 16K
+    RAM (rwx) : ORIGIN = 0x20000000, LENGTH = 8K
 }
 
 __stack_top = 0x20010000;
