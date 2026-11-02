@@ -322,8 +322,8 @@ def _compare(m, ref, flags_defined):
     return problems
 
 
-def _load_model(images, layout, options):
-    m = Machine(thumb_regions=layout.thumb_regions, options=options)
+def _load_model(images, layout, options, traps=False):
+    m = Machine(thumb_regions=layout.thumb_regions, options=options, traps=traps)
     for base, size in layout.regions:
         m.mem.map(base, size)
     for img in images:
@@ -333,10 +333,11 @@ def _load_model(images, layout, options):
 
 
 def simulate(images, stop: int, entry: int | None = None, max_steps: int = 50_000_000,
-             options: Options = Options()) -> Result:
-    """Run the model alone (no reference) from `entry` until pc == `stop`."""
+             options: Options = Options(), traps: bool = False) -> Result:
+    """Run the model alone (no reference) from `entry` until pc == `stop`.
+    `traps`: take synchronous traps (to mtvec) instead of stopping."""
     layout = Layout.for_images(images)
-    m = _load_model(images, layout, options)
+    m = _load_model(images, layout, options, traps)
     m.pc = (images[0].entry if entry is None else entry) & ~1
     stop &= ~1
     result = Result(model=m)

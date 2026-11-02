@@ -237,7 +237,8 @@ def test_thumb_flag_readers(rtl_simulator, build_mixed, tmp_path):
 
 def check_interrupts(images, tmp_path, seed):
     """Run `images` (an irq_*main.c program) without and with interrupts
-    (sim/tb.sv +irq): the same result, and every interrupt between two
+    (sim/tb.sv +irq): the same result, both in lockstep with the model (which
+    takes each interrupt where the core did), and every interrupt between two
     instructions, none of whose ops ran before it. Returns the interrupts
     taken: [(mepc, ops the interrupted instruction then ran)], Thumb ones only."""
     (tmp_path / "quiet").mkdir()
@@ -247,6 +248,9 @@ def check_interrupts(images, tmp_path, seed):
     assert rtlsim.lockstep(images, quiet) is None
     noisy = run(images, tmp_path / "irq", irq=seed)
     assert noisy.status == "EXIT" and noisy.a0 == quiet.a0
+    # Phase 5.1: the run with interrupts, in lockstep too, handler included.
+    divergence = rtlsim.lockstep(images, noisy)
+    assert divergence is None, str(divergence)
 
     entry, read_mepc, mret = (images[0].symbols[s] for s in ("irq_handler", "irq_mepc", "irq_mret"))
     trace = noisy.trace
@@ -400,6 +404,48 @@ def test_float_kernels(rtl_simulator, build_bench, tmp_path):
     image, result, model = run_thumb_program(build_bench.float_kernels(), tmp_path, max_cycles=100_000_000)
     reference = lockstep.simulate([image], stop=image.symbols["done"])
     assert result.a0 == reference.final_regs[0]
+
+
+def test_synchronous_traps(rtl_simulator, build_mixed, tmp_path):
+    """Phase 5.1: traps from Thumb code (SVC, BKPT, UDF, a trapping MRS,
+    misaligned and faulting loads and stores, one at op 1 of its expansion)
+    and from RISC-V (ecall, ebreak), handled and resumed, in lockstep with
+    the model, which takes the same traps. The records the handler keeps are
+    checked against what the architecture says."""
+    rv_elf, thumb_elf = build_mixed(["trap_lib.S"], ["trap_main.c", "trap_handler.S"])
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    assert result.status == "EXIT"
+    divergence, model = rtlsim.replay(images, result)
+    assert divergence is None, str(divergence)
+    alone = lockstep.simulate(images, stop=images[0].symbols["done"], options=rtlsim.HARDWARE, traps=True)
+    assert alone.stopped == "stop address" and alone.final_regs[0] == result.a0
+
+    rv, thumb = images
+    words = lambda name, n: [int.from_bytes(model.mem.read_bytes(rv.symbols[name] + 4 * k, 4), "little")
+                             for k in range(n)]
+    n = words("nrecords", 1)[0]
+    records = [tuple(words("records", 4 * n)[4 * k:4 * k + 4]) for k in range(n)]
+    fn = lambda name: thumb.functions[name] & ~1
+    expected = [
+        (11, fn("t_svc"), rv32.ecall(), 42),           # ecall: mtval is the instruction
+        (3, fn("t_bkpt"), rv32.ebreak(), 7),
+        (2, fn("t_udf"), 0, 0),                     # the illegal instruction: 0
+        (2, fn("t_mrs_msp") + 2, 0, 0),             # after its MOVS
+    ]
+    assert records[:4] == expected, records
+    causes = [rec[0] for rec in records]
+    assert causes == [11, 3, 2, 2, 4, 4, 5, 6, 11, 3], causes
+    assert records[4][1] == fn("t_load") and records[4][2] & 3 == 1        # misaligned address
+    assert records[5][1] == fn("t_load_reg") and records[5][2] & 3 == 2    # at op 1: base + offset
+    assert records[6][1:3] == (fn("t_load"), 0x3000_0000)                   # access fault
+    assert records[7][1] == fn("t_store") and records[7][2] & 3 == 2
+    assert not thumb_region(images, records[8][1]) and records[8][2] == rv32.ecall()
+    assert words("results", 4) == [0, records[4][2], records[5][2] - 2, 0x3000_0000]
+
+
+def thumb_region(images, addr):
+    return any(lo <= addr < hi for img in images if img.is_thumb for lo, hi in img.code_ranges())
 
 
 def test_thumb_calls_back_into_riscv(rtl_simulator, build_mixed, tmp_path):

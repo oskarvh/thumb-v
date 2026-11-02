@@ -25,6 +25,7 @@ from .build import REPO, ToolMissing
 from .expander import Options
 from .lockstep import Divergence, Layout, _load_model, describe
 from .machine import PAGE, Trap
+from .rv32 import MSTATUS_MIE
 
 CORE = REPO / "build" / "rtl" / "VexRiscv.v"
 SIM_DIR = REPO / "build" / "sim"
@@ -225,12 +226,17 @@ def thumb_boot(thumb: elf.Image) -> elf.Image:
     return elf.Image("EM_RISCV", RESET_VECTOR, [elf.Segment(RESET_VECTOR, code, True)], {}, {})
 
 
-def lockstep(images, result: Result, options: Options = HARDWARE) -> Divergence | None:
+# The interrupt the testbench raises (sim/tb.sv +irq): the core's timer input.
+TIMER_INTERRUPT = 7
+
+
+def lockstep(images, result: Result, options: Options = HARDWARE,
+             interrupt: int = TIMER_INTERRUPT) -> Divergence | None:
     """Replay the RTL's retire trace against the model; the first difference, if any."""
-    return replay(images, result, options)[0]
+    return replay(images, result, options, interrupt)[0]
 
 
-def replay(images, result: Result, options: Options = HARDWARE):
+def replay(images, result: Result, options: Options = HARDWARE, interrupt: int = TIMER_INTERRUPT):
     """lockstep(), and the model it ran: (divergence or None, Machine). Without
     a divergence, the model's state is the RTL's, memory included, so a test
     can read a program's results from it.
@@ -238,6 +244,12 @@ def replay(images, result: Result, options: Options = HARDWARE):
     The RTL retires each op of a Thumb instruction as its own record, all with
     the instruction's address (PC-hold), so the model runs Thumb code one op
     at a time too: op k of its expansion against record k.
+
+    Traps (Phase 5.1): a trapping op doesn't retire, so the trace goes on at
+    the trap vector instead. There, the model runs its op on a snapshot: if
+    the op traps, it was that synchronous trap; if not, the model rolls back
+    and takes `interrupt`, which must be at an instruction boundary (op 0)
+    with interrupts enabled. FormalPlugin doesn't flag interrupts itself.
     """
     layout = Layout.for_images(images)
     m = _load_model(images, layout, options)
@@ -257,11 +269,17 @@ def replay(images, result: Result, options: Options = HARDWARE):
         else:
             ops, length, n = [m.mem.read(pc, 4)], 4, 4
         insn = m.mem.read(pc, n)
-        target = None
-        for op in ops:
+        target, trapped = None, False
+        for k, op in enumerate(ops):
             if i == len(trace):
                 return None, m                    # the run ended part-way through
             r = trace[i]
+            if r.pc != pc and r.pc == m.trap_vector:
+                problem = _enter_trap(m, op, k, pc, length, interrupt)
+                if problem:
+                    return (Divergence(i, r.pc, describe(m, layout, pc), [problem]), m)
+                trapped = True
+                break
             problems = []
             if r.pc != pc:
                 problems.append(f"pc: model {pc:#010x}, RTL {r.pc:#010x}")
@@ -291,8 +309,28 @@ def replay(images, result: Result, options: Options = HARDWARE):
             if problems:
                 return (Divergence(i, r.pc, describe(m, layout, r.pc), problems), m)
             i += 1
-        m.pc = target if target is not None else (pc + length) & 0xFFFF_FFFF
+        if not trapped:
+            m.pc = target if target is not None else (pc + length) & 0xFFFF_FFFF
     return None, m
+
+
+def _enter_trap(m, op, k, pc, length, interrupt) -> str | None:
+    """The RTL went to the trap vector instead of retiring op k of the
+    instruction at pc: take the same trap in the model. A problem, or None."""
+    state = m.snapshot()
+    try:
+        m.execute(op, pc, link=pc + length)
+    except Trap as trap:
+        m.restore(state)
+        m.take_trap(trap)
+        return None
+    m.restore(state)
+    if k:
+        return f"RTL trapped at op {k}, which doesn't trap in the model (interrupts only between instructions)"
+    if not m.mstatus & MSTATUS_MIE:
+        return "RTL took an interrupt with mstatus.MIE clear"
+    m.interrupt(interrupt)
+    return None
 
 
 def _bytes(stores):

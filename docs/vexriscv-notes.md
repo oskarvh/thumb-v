@@ -119,6 +119,8 @@ csr.onWrite(0x7C8) { ... }        // side effect on write
 ## Other findings
 
 - **No Zbb plugin** in this VexRiscv (Q4). Zbb would need a custom plugin; VexiiRiscv has one.
+- **Traps in the trace:** an instruction that traps doesn't retire, so it has no RVFI record; the next record is the handler's first instruction. `rvfi_intr` is always 0 in this FormalPlugin, so interrupts aren't flagged either. The lockstep infers both (Phase 5.1, [soc.md](soc.md#lockstep-against-the-model)).
+- **`mstatus.MPP`** is a register even with machine mode only: it resets to 3, trap entry sets it to 3, a write sets it only when writing 3, and `mret` clears it to 0. `mtval` is the faulting address for memory faults and the instruction word (the expanded op, for Thumb) for illegal instructions, `ecall` and `ebreak`. The model follows all of this.
 - **RVFI for Thumb:** with PC-hold, each op retires as its own RVFI record, with `rvfi_pc_rdata` = the Thumb address and `rvfi_insn` = the raw Thumb halfwords (`FORMAL_INSTRUCTION`, `Fetcher.scala:431`). The lockstep in `thumbv.rtlsim` compares one op at a time, so it extends to Thumb code by grouping consecutive records with the same PC against the model's expansion.
 - **`c.j .`:** the testbench only stops on the 32-bit `j .`. Programs built with RVC would need it to recognise `c.j .` too. Not needed so far, since the C test programs are `rv32im`.
 

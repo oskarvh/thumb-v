@@ -75,7 +75,7 @@ uv run python -m thumbv.rtlsim build/hello.elf
 `tests/test_rtl.py` runs hello world and the all-RISC-V builds of the interworking test programs. Each must give the model's result and match it instruction by instruction. A mutant trace checks that the lockstep catches a wrong register write.
 
 Limits for now:
-- **No trap handling.** The model doesn't model taking a trap: it stops with `Trap`. So the lockstep covers programs that don't trap. Trap handling comes with the trap entry routine (Phase 5).
-- **Interrupts:** the model doesn't take them, so a run with `+irq` isn't replayed; `tests/test_rtl.py` checks its result and where each interrupt landed instead (Phases 3.4, 4.4).
+- **Traps and interrupts (Phase 5.1):** a trapping instruction doesn't retire on VexRiscv, so the trace goes on at `mtvec`. There, the model runs its next op on a snapshot. If the op traps, the model takes that trap (`mepc`, `mcause`, `mtval`, `mstatus` as VexRiscv sets them). If it doesn't, the model rolls back and takes the interrupt instead (`lockstep(..., interrupt=7)`, the testbench's timer input), which must come at an instruction boundary with `mstatus.MIE` set. FormalPlugin's own interrupt flag is always 0, so this inference is the only way.
+- **Interrupt runs** (`+irq`) are replayed in full since Phase 5.1, handlers included; `tests/test_rtl.py` also checks where each interrupt landed (Phases 3.4, 4.4).
 
 **Thumb-only programs** (linked by `tests/link/thumb.ld`, such as CoreMark and Embench) run behind a boot stub that `rtlsim.thumb_boot` generates: at the reset vector, it marks the program's code as Thumb region 0 and jumps to its entry point (Phase 4.4). `rtlsim.replay` returns the model after a clean lockstep, whose memory is then the RTL's, so a test can read results from it, such as CoreMark's own validation text.

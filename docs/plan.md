@@ -491,10 +491,17 @@ Goal: interrupts and traps work across both instruction sets through one control
   - **Whole programs:** the model takes traps and returns from them, so the lockstep covers interrupt-driven programs too. The model enters a trap where the RTL's trace jumps to `mtvec`, and reads the controller's registers as device inputs, as it does the UART's.
 
 **Steps:**
-1. **The model takes traps.**
+1. **The model takes traps.** (done)
    - **Traps and `mret`:** synchronous traps go to `mtvec` with `mepc`, `mcause` and `mtval`, instead of stopping the run; `mret` returns.
    - **Asynchronous ones:** the RTL lockstep enters them where the RTL did. FormalPlugin doesn't flag interrupts (`rvfi_intr` is always 0), so this is where the trace reaches `mtvec` while the model expected another instruction, which must be an instruction boundary.
    - **Checks:** the 3.4 and 4.4 interrupt tests are replayed in full in lockstep, handler included.
+   - **Done:**
+     - **Model:** `Machine.take_trap`, `interrupt` and `mret`, with `mepc`, `mcause`, `mtval` and `mstatus` as VexRiscv sets them; `Machine(traps=True)` takes synchronous traps instead of stopping (`lockstep.simulate(..., traps=True)`). Instruction fetch faults are now `instruction_access_fault`.
+     - **RTL lockstep:** where the trace reaches `mtvec` instead of the next op, the model tries that op on a snapshot. If it traps, the model takes the same trap; otherwise it rolls back and takes the interrupt, which must be at op 0 with `MIE` set.
+     - **What it found:** `mstatus.MPP` on VexRiscv is cleared by `mret`, not hard-wired to 3 as the model had it since 3.3, and only MIE, MPIE and MPP exist. The first replay of an interrupt run diverged at an `MRS PRIMASK` after the first `mret`.
+     - **Interrupt runs:** the 3.4 and 4.4 tests now replay their `+irq` runs in full, handler included, all three seeds each (about 2,000 interrupts per run).
+     - **Synchronous traps:** `test_synchronous_traps` (`tests/c/trap_lib.S`, `trap_main.c`) traps from Thumb code (`SVC`, `BKPT`, `UDF`, `MRS MSP`, misaligned and faulting loads, a misaligned store, one load at op 1 of its expansion) and from RISC-V (`ecall`, `ebreak`). It resumes after each, in lockstep, and against the model running alone with traps. The handler's records (cause, `mepc`, `mtval`, the `SVC`/`BKPT` number) are checked against the architecture.
+     - **Negative control:** a wrong `ecall` cause in the model diverges at the handler's `csrr mcause`.
 2. **The controller and SysTick in the RTL**, in the SoC, driving the core's external interrupt.
    - **The testbench's `+irq`** drives interrupt lines of the controller instead of the core's timer input.
    - **Unit check:** `tests/test_nvic_rtl.py` against `model/thumbv/nvic.py`.
@@ -564,6 +571,6 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board). Phase 3 is done: 3.1–3.3 (the sequencer and every multi-op expansion), 3.4 (interrupts at Thumb boundaries), 3.5 (calls in both directions, in simulation and on the board). Phase 4: 4.1 (strategy C in the model), 4.2 (the flags unit and flag writers in the RTL), 4.3 (the flag readers: the RTL is now all of strategy C), 4.4 (gcc code with loops, CoreMark and Embench on the RTL; loops on the board). Phase 5 is planned.
+Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board). Phase 3 is done: 3.1–3.3 (the sequencer and every multi-op expansion), 3.4 (interrupts at Thumb boundaries), 3.5 (calls in both directions, in simulation and on the board). Phase 4: 4.1 (strategy C in the model), 4.2 (the flags unit and flag writers in the RTL), 4.3 (the flag readers: the RTL is now all of strategy C), 4.4 (gcc code with loops, CoreMark and Embench on the RTL; loops on the board). Phase 5: 5.1 (the model takes traps; the RTL lockstep follows the core into them).
 
-1. Phase 5, step 1: the model takes traps, and the RTL lockstep follows the core into them.
+1. Phase 5, step 2: the controller (NVIC programming model) and SysTick in the RTL.
