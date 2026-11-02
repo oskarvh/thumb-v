@@ -8,6 +8,7 @@
 //   +trace=<file>   write one line per retired instruction (RVFI), see below
 //   +cycles=<n>     give up after n cycles (default 10,000,000)
 //   +wave=<file>    dump every signal to an FST waveform (GTKWave, Surfer)
+//   +irq=<seed>     raise the timer interrupt again and again, see below
 //
 // The UART line is decoded here and printed to stdout. The run ends when the
 // core retires `j .` (0x0000006f), the loop the startup code spins in at
@@ -16,6 +17,11 @@
 //
 // Trace lines, all hex: pc insn rd rd_wdata mem_addr mem_rmask mem_wmask
 // mem_rdata mem_wdata trap
+//
+// Interrupts (+irq): the testbench raises the core's timer interrupt after a
+// pseudo-random delay of 1 to 29 cycles, and holds it until the program
+// acknowledges with a store to 0x1000_000C (an unmapped I/O address: the SoC
+// drops the store, the testbench sees it). Then the next delay starts.
 
 `timescale 1ns / 1ps
 
@@ -32,9 +38,11 @@ module tb #(
 
     always #5 clk = ~clk;
 
+    logic irq = 0;
+
     thumbv_soc #(.CODE_WORDS(CODE_WORDS), .DATA_WORDS(DATA_WORDS),
                  .UART_CLKS_PER_BIT(CLKS_PER_BIT)) dut (
-        .clk(clk), .reset(reset), .uart_tx(uart_tx), .leds(leds));
+        .clk(clk), .reset(reset), .irq_timer(irq), .uart_tx(uart_tx), .leds(leds));
 
     string code_file, data_file, trace_file, wave_file;
     longint max_cycles = 10_000_000;
@@ -81,6 +89,32 @@ module tb #(
         end
         if (cycles >= max_cycles)
             finish("TIMEOUT");
+    end
+
+    // --- Interrupt source (+irq) --------------------------------------------------
+
+    int irq_seed = 0;
+    int irq_wait = 0;
+    longint irqs = 0;
+    wire irq_ack = dut.dbus_cmd_valid && dut.dbus_cmd_wr && dut.dbus_cmd_address == 32'h1000_000c;
+
+    initial void'($value$plusargs("irq=%d", irq_seed));
+
+    always @(posedge clk) begin
+        if (irq_seed != 0 && !reset && !done) begin
+            if (irq && irq_ack) begin
+                irq <= 0;
+                irq_seed <= irq_seed * 1103515245 + 12345;
+                irq_wait <= 1 + (irq_seed >>> 16 & 32'h7fff) % 29;
+            end else if (!irq) begin
+                if (irq_wait <= 1) begin
+                    irq <= 1;
+                    irqs <= irqs + 1;
+                end else
+                    irq_wait <= irq_wait - 1;
+            end
+        end else
+            irq <= 0;
     end
 
     // Let the UART finish the last byte, and the receiver below print it.

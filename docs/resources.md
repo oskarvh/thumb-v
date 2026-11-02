@@ -7,6 +7,9 @@ FPGA resource use and timing of the board design ([board.md](board.md)), one row
 | 1.4 stock core | 2026-10-31 | 2,966 (12%) | 1,224 | 50 (76%) | 8 | 50.5 MHz | RV32IMC VexRiscv ([core.md](core.md)), 32 KiB code + 16 KiB data RAM, UART, LEDs; no PLL, runs at 12 MHz |
 | 2.1 mode switch | 2026-11-01 | 3,351 (14%) | 1,364 | 50 (76%) | 8 | 48.8 MHz | + 2 Thumb regions (four 30-bit CSRs and comparators in fetch), the Thumb length rule, the stub expander |
 | 2.2 single-op expander | 2026-11-01 | 3,954 (16%) | 1,364 | 50 (76%) | 8 | 42.8 MHz | + the expander: every single-op Thumb instruction. Critical path (23 ns): code RAM → aligner → expander → register file read address |
+| 3.1 sequencer | 2026-11-01 | 5,038 (20%) | 1,401 | 50 (76%) | 8 | 38.9 MHz | + the sequencer, the expander in decode (ops 1 and up, and the next op's registers), the 3.1 multi-op instructions. Critical path (25.6 ns): injector register → expander → decoder → bypass → execute's RS1 |
+| 3.2 register lists | 2026-11-01 | 5,275 (21%) | 1,434 | 50 (76%) | 8 | 33.9 MHz | + `PUSH`/`POP`/`LDM`/`STM`; decode's op and `last` now from registers (without that: 5,575 LEs, 31.4 MHz). Critical path (29.5 ns): code RAM → aligner → op 0's expansion → register file read address |
+| 3.3 complete expander | 2026-11-01 | 5,614 (23%) | 1,434 | 50 (76%) | 8 | 33.3 MHz | + shifts by a register, `REV`/`REV16`/`REVSH`, PRIMASK: every result-only expansion. Same critical path (30.0 ns) |
 
 ## 1.4 baseline
 

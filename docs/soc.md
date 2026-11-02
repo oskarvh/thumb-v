@@ -8,7 +8,7 @@ The map matches the software model's layout ([build.py](../model/thumbv/build.py
 
 | Address | Size | What |
 |---|---|---|
-| `0x0000_0000` | 256 KiB | Code RAM: instructions and read-only data. Also readable and writable as data, for literal pools and `.rodata`. Thumb programs link at `0x1_0000` and the Thumb libraries of mixed programs at `0x1_4000`; RISC-V code at `0x2_0000`, which is also the reset vector. |
+| `0x0000_0000` | 256 KiB | Code RAM: instructions and read-only data. Also readable and writable as data, for literal pools and `.rodata`. Thumb programs link at `0x1_0000` and the Thumb libraries of mixed programs at `0x1_4000`; RISC-V code at `0x2_0000`, which is also the reset vector: a jump to `_start`, then the import jump table for Thumb code at `0x2_0004` (`tests/link/rv32.ld`). |
 | `0x1000_0000` | | UART data: writing sends the low byte |
 | `0x1000_0004` | | UART status: bit 0 = busy |
 | `0x1000_0008` | | LEDs: bits 7:0, read/write |
@@ -38,6 +38,7 @@ The 256 KiB code RAM fits in simulation only: the 10CL025 has about 66 KB of blo
 - **UART:** it decodes the UART line back into characters and prints them.
 - **Trace:** it logs every retired instruction from the core's RVFI port (VexRiscv's `FormalPlugin`).
 - **Waveforms:** `+wave=<file>` dumps every signal to an FST file, for GTKWave or Surfer. See [Waveforms](#waveforms).
+- **Interrupts:** `+irq=<seed>` raises the core's timer interrupt (the SoC's `irq_timer` input) after a pseudo-random delay of 1 to 29 cycles, and holds it until the program acknowledges with a store to `0x1000_000C`. The SoC drops stores to that unmapped address, but the testbench sees it. Then the next delay starts. On the board, `irq_timer` is tied to 0 until the interrupt controller (Phase 5).
 - **Stopping:** the run ends when the core retires `j .`, the loop the startup code spins in at `done`. The testbench waits for the UART to finish its last byte, then prints `EXIT <a0> <cycles> <instructions>`. If the cycle limit is reached first, it prints `TIMEOUT`.
 
 ## Waveforms

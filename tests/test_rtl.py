@@ -64,7 +64,8 @@ def build_rv_asm(name, tmp_path):
     """An RV32 program from tests/asm/ with its own _start, linked like the C programs."""
     source = Path(__file__).parent / "asm" / name
     return elf.load(build.compile_and_link("rv32", [source], tmp_path / (source.stem + ".elf"),
-                                           [*build.C_FLAGS["rv32"], build._linker_script("rv32.ld")]))
+                                           [*build.C_FLAGS["rv32"], build._linker_script("rv32.ld"),
+                                            "-Wl,--entry=_start"]))   # no crt_rv32.S, so no _reset
 
 
 def test_thumb_mode_switch(rtl_simulator, tmp_path):
@@ -97,6 +98,139 @@ def test_thumb_single_ops(rtl_simulator, build_mixed, tmp_path):
     assert in_thumb > 80                    # both calls ran in Thumb mode
     divergence = rtlsim.lockstep(images, result)
     assert divergence is None, str(divergence)
+
+
+def thumb_instructions_run(images, result):
+    """The Thumb instructions in an RTL trace: {(pc, name): ops per execution}.
+
+    The ops of one execution are consecutive records with the same PC.
+    """
+    thumb = images[1]
+    ops, previous, run = {}, None, 0
+    for r in result.trace:
+        if not any(lo <= r.pc < hi for lo, hi in thumb.code_ranges()):
+            previous = None
+            continue
+        name = expander.expand(r.insn & 0xFFFF, r.insn >> 16, r.pc, rtlsim.HARDWARE).name
+        run = run + 1 if r.pc == previous else 1
+        ops[r.pc, name] = max(ops.get((r.pc, name), 0), run)
+        previous = r.pc
+    return ops
+
+
+def test_thumb_sequences(rtl_simulator, build_mixed, tmp_path):
+    """Phase 3.1: an assembled Thumb function of two- to five-op instructions,
+    run by the sequencer, in lockstep with the model op by op."""
+    rv_elf, thumb_elf = build_mixed(["rtl_thumb_seq.S"], ["rtl_thumb_seq_main.c"])
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    run_ops = thumb_instructions_run(images, result)
+    multi = {name for (pc, name), n in run_ops.items() if n > 1}
+    assert multi >= {"LDR_lit", "ADR", "STR_reg", "STRH_reg", "STRB_reg", "LDR_reg", "LDRH_reg",
+                     "LDRSH_reg", "LDRB_reg", "LDRSB_reg", "BICS", "SXTH", "SXTB", "UXTH",
+                     "MOV_hi", "ADD_hi"}
+    # LDR (literal) ran at both alignments.
+    assert {pc % 4 for pc, name in run_ops if name == "LDR_lit"} == {0, 2}
+
+
+def test_thumb_register_lists(rtl_simulator, build_mixed, tmp_path):
+    """Phase 3.2: PUSH/POP with LR and PC, LDM/STM, a nested call."""
+    rv_elf, thumb_elf = build_mixed(["rtl_thumb_lists.S"], ["rtl_thumb_lists_main.c"])
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    run_ops = thumb_instructions_run(images, result)
+    longest = {}
+    for (pc, name), n in run_ops.items():
+        longest[name] = max(longest.get(name, 0), n)
+    assert longest["PUSH"] == 6 and longest["POP"] == 7     # {r4-r7, lr}: 5 + SP; {r4-r7, pc}: 4 + T1, SP, jump
+    assert longest["STM"] == 5 and longest["LDM"] == 4
+
+
+def test_thumb_shifts_reversals_primask(rtl_simulator, build_mixed, tmp_path):
+    """Phase 3.3: shifts by a register, REV*, MSR/MRS of PRIMASK."""
+    rv_elf, thumb_elf = build_mixed(["rtl_thumb_misc.S"], ["rtl_thumb_misc_main.c"])
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    names = {name for (pc, name), n in thumb_instructions_run(images, result).items()}
+    assert names >= {"LSLS_reg", "LSRS_reg", "ASRS_reg", "RORS", "REV", "REV16", "REVSH",
+                     "MSR", "MRS", "CPSID", "CPSIE"}
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_interrupts_land_between_thumb_instructions(rtl_simulator, build_mixed, tmp_path, seed):
+    """Phase 3.4 (D3): with the timer interrupt raised every few cycles, Thumb
+    code gives the same result, and every interrupt lands between two
+    instructions: none of the interrupted instruction's ops ran before it.
+    Without the sequencer's interrupt gating, the program doesn't finish
+    (checked by hand: an interrupt part-way through a PUSH or POP {pc})."""
+    rv_elf, thumb_elf = build_mixed(["rtl_thumb_lists.S", "rtl_thumb_seq.S", "rtl_thumb_misc.S"],
+                                    ["irq_main.c", "irq_handler.S"])
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    (tmp_path / "quiet").mkdir()
+    (tmp_path / "irq").mkdir()
+    quiet = run(images, tmp_path / "quiet")
+    assert rtlsim.lockstep(images, quiet) is None
+    noisy = run(images, tmp_path / "irq", irq=seed)
+    assert noisy.a0 == quiet.a0
+
+    entry, read_mepc, mret = (images[0].symbols[s] for s in ("irq_handler", "irq_mepc", "irq_mret"))
+    trace = noisy.trace
+    entries = [i for i, r in enumerate(trace) if r.pc == entry]
+    thumb, multi_op = 0, 0
+    for i in entries:
+        before = trace[i - 1]
+        mepc = next(r.rd_wdata for r in trace[i:] if r.pc == read_mepc)
+        back = next(k for k in range(i, len(trace)) if trace[k].pc == mret) + 1
+        assert before.pc != mepc, f"interrupt inside the instruction at {mepc:#x}"
+        # Back to mepc, or straight into the next interrupt (taken before the
+        # instruction at mepc ran; its mepc is the same).
+        assert trace[back].pc in (mepc, entry), f"returned to {trace[back].pc:#x}, not {mepc:#x}"
+        if trace[back].pc == entry:
+            continue
+        if 0x1_4000 <= mepc < 0x2_0000:
+            thumb += 1
+            # The interrupted instruction, once resumed: several ops?
+            k = back
+            while k + 1 < len(trace) and trace[k + 1].pc == mepc:
+                k += 1
+            multi_op += k > back
+    # Enough of them, in Thumb code, in front of multi-op instructions.
+    assert len(entries) > 300 and thumb > 150 and multi_op > 30, (len(entries), thumb, multi_op)
+
+
+def test_thumb_calls_back_into_riscv(rtl_simulator, build_mixed, tmp_path):
+    """Phase 3.5: gcc-compiled Thumb code calls RISC-V functions (PUSH/POP
+    around a BL through the import table) and reads a table through a
+    literal pool; RISC-V prints the results. In lockstep with the model."""
+    rv_elf, thumb_elf = build_mixed(["callback.c"], ["callback_main.c"], interface="callback.h")
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    digits = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3]
+    lookup5, callback11, report7 = digits[5], 12 * 12 + 11, digits[7] * 1000 + 8 * 8 + 7
+    assert result.uart == ("RISC-V and Thumb call each other\n"
+                           f"t_lookup(5)        = {lookup5:08x}\n"
+                           f"t_callback(11)     = {callback11:08x}\n"
+                           f"Thumb reports      = {report7:08x}\n")
+    assert result.a0 == lookup5 + callback11 + report7
+    # Thumb really called RISC-V: a BL from the Thumb window into the import table.
+    in_thumb = lambda pc: 0x1_4000 <= pc < 0x2_0000
+    calls = sum(1 for a, b in zip(result.trace, result.trace[1:])
+                if in_thumb(a.pc) and b.pc in (rtlsim_import(0), rtlsim_import(1)))
+    assert calls >= 4
+    rtlsim.memory_images(images, tmp_path, rtlsim.BOARD)     # it fits the board
+
+
+def rtlsim_import(i):
+    """Address of the i-th slot of the import jump table (thumbv.build.IMPORT_BASE)."""
+    return build.IMPORT_BASE + 4 * i
 
 
 def single_op_violations(thumb_image):

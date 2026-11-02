@@ -8,7 +8,8 @@ Memory layout of the programs (see tests/link/):
   Thumb libraries       code 0x0001_4000, data 0x2000_0000 (16 KiB)   for mixed programs:
                         the Thumb window, Thumb region 0 (set by crt_rv32.S)
   RV32 programs         code 0x0002_0000, data 0x2000_4000 (16 KiB)
-                        the import jump table for Thumb code first, at IMPORT_BASE
+                        a jump to _start at 0x0002_0000 (the core's reset vector), then
+                        the import jump table for Thumb code, at IMPORT_BASE
   Stack                 top at 0x2001_0000, shared
 """
 
@@ -26,7 +27,7 @@ BENCH_DIR = REPO / "tests" / "bench"
 COREMARK = REPO / "third_party" / "coremark"
 EMBENCH = REPO / "third_party" / "embench-iot"
 
-IMPORT_BASE = 0x0002_0000  # start of RV32 ROM, see tests/link/rv32.ld
+IMPORT_BASE = 0x0002_0004  # after the reset jump at the start of RV32 ROM, see tests/link/rv32.ld
 
 TOOLCHAINS = {
     "thumb": ("arm-none-eabi-gcc", ["-mcpu=cortex-m0", "-mthumb"]),

@@ -41,6 +41,7 @@ module cyc1000_top #(
     ) soc (
         .clk     (CLK12M),
         .reset   (reset),
+        .irq_timer (1'b0),               // no interrupt sources yet (Phase 5)
         .uart_tx (UART_TX),
         .leds    (LED)
     );

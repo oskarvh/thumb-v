@@ -282,11 +282,83 @@ Goal: a RISC-V program calls its first Thumb function in hardware.
 
 **Exit criteria:** exhaustive expander check passes; the mixed call test (a leaf Thumb function, see 2.4) runs in simulation and on the board.
 
+## Phase 3: Sequencer
+
+Goal: every Thumb instruction that doesn't need the flags runs in hardware, however many RV32 ops it takes, and interrupts land only between Thumb instructions (D3). Still results only (`Options(flags="none")`). `ADCS`, `SBCS`, `B<cond>` and `MRS`/`MSR` of the APSR stay illegal until the flags unit (Phase 4).
+
+**Design** (from the 1.3 spike, [vexriscv-notes.md](vexriscv-notes.md#holding-decode-the-sequencer)):
+- **The expander becomes `expand(hw1, hw2, pc[1], step) → (op, last)`.** Expansions are at most 11 ops (`POP {r0-r7, pc}`, `REV`), so `step` is 4 bits.
+- **The sequencer** sits in the fetcher's injector:
+  - it holds the Thumb instruction in the injector register until its last op has gone into decode;
+  - it sets `injectedDecode` on every op but the last, so all ops carry the Thumb instruction's PC (PC-hold);
+  - it resets `step` when decode is flushed.
+- **Timing: no new path from the code RAM.**
+  - **Op 0:** stays expanded before the injector register, as now, so the register file's early read address for op 0 comes from the same path as today.
+  - **Ops 1 and up:** come from the registered Thumb instruction in decode, and the early read address for op `step + 1` comes from the same register. Only the `rs1`/`rs2` fields of that second expansion are used, so synthesis prunes the rest.
+- **Ready when empty:** the sequencer only holds while the injector register is valid. The stages pass `ready` straight through, and the spike deadlocked without this.
+- **Interrupt gating:** `InterruptionInhibitor` while decode holds op 1 or later. An interrupt can then only halt decode at op 0, so `mepc` is always a Thumb instruction's address.
+- **Faults partway through** an instruction restart it from op 0. Expansions must stay restartable: the base register or SP is updated last. A test checks every expansion for this.
+
+**Steps:**
+1. **Sequencer, PC-hold and the two-op instructions.** (done) The register-offset loads and stores, `LDR` (literal), `ADR`, `BICS`, `SXTH`/`SXTB`/`UXTH`, long `BL`, and `MOV`/`ADD`/`BX`/`BLX` with the PC. These are short, fixed sequences, enough to build and prove the sequencer on.
+   - The lockstep compares Thumb code one op at a time: the RTL retires each op as its own record with the Thumb instruction's PC, and the model gains a per-op step to match.
+   - The exhaustive check extends to whole sequences: the standalone expander gets `step` and `pc[1]` inputs, and every 16-bit instruction is compared op by op, `last` included, at both PC alignments.
+   - **Done:**
+     - The sequencer and PC-hold, as designed, in the fetcher's injector. Interrupt gating is in too; its test comes in step 4.
+     - The 3.1 instructions pass the exhaustive check op by op, and op 0 never depends on the PC's alignment.
+     - An assembled Thumb function of 3.1 instructions runs on the RTL in lockstep with the model, op by op. It covers `LDR` literal at both alignments, `ADR`, all eight register-offset loads and stores, `BICS`, the extends, the PC as an operand, and `ADD pc, rm`.
+     - Cost: about 1,100 LEs (5,038 in all), Fmax 38.9 MHz. The expander in decode is now on the path into execute.
+2. **Register lists:** `PUSH`, `POP` (including `POP {pc}`), `LDM`, `STM`. Op `k` needs the `k`-th register in the list, a priority encoder over the list with the first `k` registers masked. (done)
+   - **Exhaustive check:** all four pass, op by op. The check now also requires an expansion's length not to depend on the PC's alignment.
+   - **Restartability:** `tests/test_restartable.py` checks that every 16-bit expansion can restart from op 0 after a fault: no op before a load or store overwrites an input.
+   - **In the core:** an assembled Thumb function runs in lockstep, with:
+     - `PUSH {r4-r7, lr}` / `POP {r4-r7, pc}`;
+     - a nested call with its own `PUSH`/`POP`;
+     - `STM`/`LDM` with write-back, and `LDM` with its base in the list.
+   - **Timing fix:** the sequencer now takes decode's op and `last` from registers. The new population counts had made `last` the critical path (31 MHz), through `decodeInput.ready` to the fetch PC. Now 33.9 MHz and 5,275 LEs.
+3. **The rest:** the register shifts (5 ops each without flags), `REV`/`REV16`/`REVSH`, `MRS`/`MSR` of PRIMASK. (done)
+   - **Coverage:** the RTL now expands every instruction exactly as the model does in result-only mode. The exhaustive check no longer has a list of what's implemented; everything must match.
+   - **In the core:** an assembled Thumb function runs in lockstep, with all four register shifts at amounts 0, 1, 31, 32, 33 and 256, the three byte reversals, and PRIMASK through `MSR`, `MRS`, `CPSID` and `CPSIE`.
+   - **A model fix the lockstep found:** `mstatus.MPP` now reads as machine mode (`0x1800`), as on VexRiscv, a machine-mode-only core.
+   - **Cost:** 5,614 LEs, Fmax 33.3 MHz.
+4. **Interrupts at Thumb boundaries.** (done)
+   - **Interrupt source:** the testbench drives the core's timer interrupt from a plusarg schedule, in simulation only. The interrupt controller comes in Phase 5.
+   - **Test:** a program with a trap handler that records `mepc` runs Thumb code under interrupts every few cycles. It must give the same result as without interrupts, and every recorded `mepc` must be the start of a Thumb instruction (or a RISC-V instruction).
+   - **Done** (`test_interrupts_land_between_thumb_instructions`, three seeds):
+     - **The interrupt source:** the SoC gained a timer interrupt input, and the testbench raises it every 1 to 29 cycles (`+irq`).
+     - **The program:** the 3.1–3.3 Thumb functions run under about 500 interrupts per run, over 150 of them in Thumb code and over 30 in front of multi-op instructions.
+     - **What's checked:**
+       - the same result as without interrupts (that run is in lockstep with the model);
+       - the instruction retired before each handler entry is never the interrupted one;
+       - execution resumes at `mepc`.
+     - **Negative control:** with the gating removed by hand, the program doesn't finish.
+     - **Model:** it now stores the machine trap CSRs (`mtvec`, `mie`, `mepc`, ...) so that programs can set them up. It still takes no interrupts.
+5. **Integration, the exit criterion moved from 2.4:** (done)
+   - a gcc-compiled Thumb function calls back into a RISC-V function (`PUSH {r4, lr}` … `BL` … `POP {r4, pc}`);
+   - plus a table lookup through a literal pool;
+   - in Verilator against the model, then on the board.
+
+   Loops still wait for Phase 4: gcc compiles them with conditional branches.
+   - **The program:** `tests/c/callback.c` (Thumb) and `callback_main.c` (RISC-V) call each other through the interface header `callback.h`.
+     - The Thumb side runs gcc's `PUSH {r4-r6, lr}` … `BL` (to the import table) … `POP {r4-r6, pc}`.
+     - It reads a `const` table through a literal pool, with a register-offset `LDRB`.
+     - It passes RISC-V a string from its own `.rodata` to print.
+   - **Results:** it runs in lockstep with the model, with the UART text checked against values worked out by hand. `make board PROGRAM=callback` prints the same on the CYC1000.
+   - **A layout bug it found:** the import table sat at `0x2_0000`, the core's reset vector, so with an interface header the core booted into the first import slot. The model starts at the ELF's entry point and never saw it, and no earlier RTL program had an import table. Now:
+     - `0x2_0000` holds a jump to `_start` (`_reset`, which is also the ELF's entry point, so the model starts where the core does);
+     - the import table follows at `0x2_0004`.
+
+**Phase 3 is done** (2026-11-01). The RTL expands every instruction the model does in result-only mode. Interrupts land only between Thumb instructions. gcc-compiled Thumb code with calls in both directions runs in simulation and on the board. 5,614 LEs (23%), Fmax 33.3 MHz.
+
+**Exit criteria:**
+- The exhaustive check passes for whole sequences.
+- The callback program runs in simulation and on the board.
+- The interrupt test shows no interrupt inside a Thumb instruction.
+- Resources and Fmax are logged.
+
 ## Later phases (outline)
 
-Each will get its own detailed section once Phase 2 is done.
-
-- **Phase 3: sequencer.** Multi-op expansions (`PUSH`/`POP`/`LDM`/`STM`, register-offset loads, long `BL`, register shifts, `REV`, `ADCS`/`SBCS`), the last-of-sequence bit and boundary-only interrupt gating. Exit criterion moved from 2.4: a gcc-compiled Thumb function calls back into a RISC-V function (`PUSH {lr}` … `BL` … `POP {pc}`), in simulation and on the board.
+Each will get its own detailed section when it starts.
 - **Phase 4: flags,** with the hardware NZCV unit (D1): the unit and its CSR, the set-flags side-band bit, branch-on-condition, carry-in for `ADCS`/`SBCS`, and a strategy C expansion in the model to check the RTL against.
 - **Phase 5: interrupts and mixed execution in practice.**
   - The unified controller (NVIC programming model) and the shared timer (SysTick / `mtime` views) in RTL, verified in simulation against a model of the controller.
@@ -330,7 +402,7 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board).
+Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board). Phase 3 is done: 3.1–3.3 (the sequencer and every multi-op expansion), 3.4 (interrupts at Thumb boundaries), 3.5 (calls in both directions, in simulation and on the board).
 
-1. Close Phase 2: merge `phase-2` to `main`.
-2. Phase 3: write its detailed section (the sequencer: multi-op expansions, PC hold, interrupt gating), then start.
+1. Close Phase 3: merge `phase-3` to `main`.
+2. Phase 4: write its detailed section (the NZCV flags unit, D1), then start.

@@ -97,8 +97,9 @@ def build_thumb_asm(tmp_path):
 
 @pytest.fixture
 def build_mixed(tmp_path):
-    """Build a mixed program: build_mixed(["lib.c"], ["main.c"]) -> (rv_elf, thumb_elf)."""
-    return _tools(lambda thumb_names, rv_names: build.mixed_program(thumb_names, rv_names, tmp_path))
+    """Build a mixed program: build_mixed(["lib.c"], ["main.c"], interface=None) -> (rv_elf, thumb_elf)."""
+    return _tools(lambda thumb_names, rv_names, interface=None:
+                  build.mixed_program(thumb_names, rv_names, tmp_path, interface))
 
 
 @pytest.fixture

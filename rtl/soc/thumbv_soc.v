@@ -22,6 +22,7 @@ module thumbv_soc #(
 ) (
     input  wire       clk,
     input  wire       reset,              // synchronous, active high
+    input  wire       irq_timer,          // the core's machine timer interrupt
     output wire       uart_tx,
     output reg  [7:0] leds
 );
@@ -65,7 +66,7 @@ module thumbv_soc #(
         .dBus_rsp_ready           (dbus_rsp_ready),
         .dBus_rsp_error           (dbus_rsp_error),
         .dBus_rsp_data            (dbus_rsp_data),
-        .timerInterrupt           (1'b0),
+        .timerInterrupt           (irq_timer),
         .externalInterrupt        (1'b0),
         .softwareInterrupt        (1'b0),
         // The retire trace (RVFI) is read by the simulation testbench only.

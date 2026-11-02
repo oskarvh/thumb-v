@@ -7,11 +7,15 @@ RISC-V register numbers (0-31); immediates are checked against their ranges.
 ILLEGAL = 0x00000000  # defined by the RISC-V spec as an illegal instruction
 
 MSTATUS = 0x300
+# Machine trap CSRs: the model takes no traps or interrupts, but programs set
+# them up, so it stores them (Machine.trap_csrs) with VexRiscv's reset values.
+TRAP_CSRS = {0x304: 0, 0x305: 0x20, 0x340: 0, 0x341: 0, 0x342: 0, 0x343: 0}  # mie, mtvec, mscratch, mepc, mcause, mtval
 # Thumb region CSRs (custom machine read/write): base0, limit0, base1, limit1.
 # Region i is [base_i, limit_i), word-aligned; the low two bits read as zero.
 THUMB_REGION0 = 0x7C0
 THUMB_REGIONS = 2
 MSTATUS_MIE = 1 << 3
+MSTATUS_MPP = 3 << 11   # machine mode, the only one: hard-wired, as on VexRiscv
 
 _LOAD, _STORE, _BRANCH, _JALR, _JAL = 0x03, 0x23, 0x63, 0x67, 0x6F
 _OP_IMM, _OP, _LUI, _AUIPC = 0x13, 0x33, 0x37, 0x17
