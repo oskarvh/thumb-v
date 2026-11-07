@@ -15,6 +15,8 @@ make board PROGRAM=blinky       # counts on the LEDs, forever
 make board ELF="a.elf b.elf"    # any program built with tests/link/rv32.ld (and thumb_lib.ld)
 ```
 
+For a guided tour of the demo (`PROGRAM=demo`), see [demo.md](demo.md).
+
 `make board` runs `python -m thumbv.board`, which:
 1. writes the program into the RAMs' initial contents (`build/board/code.mem` and `data.mem`);
 2. compiles the FPGA image with Quartus if the program or the RTL changed (about 30–70 s);

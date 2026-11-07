@@ -24,6 +24,8 @@ make check-tools  # see what is installed
 make test         # make test-slow also runs the benchmarks in lockstep
 ```
 
+**New here?** Start with [`docs/demo.md`](docs/demo.md): the board demo, where a button switches one FreeRTOS blinky between its RISC-V and Cortex-M0 builds. It covers how the system works, what you need, and how to build, run and test it.
+
 [`docs/setup.md`](docs/setup.md) covers installation and how to run, select and add tests. All dependencies are listed in [`docs/dependencies.md`](docs/dependencies.md).
 
 ## Architecture

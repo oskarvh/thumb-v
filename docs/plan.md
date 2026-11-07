@@ -572,7 +572,7 @@ Goal: interrupts and traps work across both instruction sets through one control
 Each will get its own detailed section when it starts.
 - **Phase 6: a demo on the board** (in place of ARM-only mode). FreeRTOS with an orchestrator task listening to the board's button and two blinkies: one C source, built by arm-gcc for Cortex-M0 and by RISC-V gcc. Each press switches which build runs.
   1. **The button for software** (done): a register at `0x1000_0010` (held; pressed, cleared by writing 1) and interrupt line 1. The board's top level debounces it and no longer uses it as reset; the testbench presses it with `+button=<period>`.
-  2. **The demo** (done): `tests/c/demo_main.c`, `demo_blinky.c`, `demo.h`; `make board PROGRAM=demo`.
+  2. **The demo** (done, [demo.md](demo.md)): `tests/c/demo_main.c`, `demo_blinky.c`, `demo.h`; `make board PROGRAM=demo`. Tested by hand on the board.
      - **Checked:** `test_board_demo`, on the RTL with the board's RAMs, in lockstep with the model. Four presses give four switches. LED 7 is on for exactly the Thumb build's writes, and the scanner moves one LED at a time across every switch.
      - **What it found:**
        - an RTL decode bug: the UART took writes to `0x1000_0010` (it decoded only address bits 3:2);
