@@ -135,6 +135,7 @@ flowchart TB
 | Sequencer, PC hold | `ThumbFetcher.scala`, marked `THUMBV` | built | 3.1 |
 | Interrupt gating | `ThumbFetcher.scala`, through `InterruptionInhibitor` | built; tested under interrupts every few cycles (3.4) | 3.1 |
 | Trap entry routine and its C API: interrupts and traps from both instruction sets | `firmware/` ([firmware.md](firmware.md)) | built, software | 5.3 |
+| FreeRTOS port glue: SysTick tick through the controller, NZCV in each task's context | `firmware/freertos/` ([firmware.md](firmware.md#freertos)) | built, software | 5.5 |
 | Boot stub for Thumb-only programs, testbench stop on Thumb's `b .` | `model/thumbv/rtlsim.py` (`thumb_boot`), `sim/tb.sv` | built, simulation only | 4.4 |
 | SoC interrupt lines, testbench interrupt source | `rtl/soc/thumbv_soc.v` (`irq[31:0]`), `sim/tb.sv` (`+irq` on line 0) | built; the board ties them to 0. Until 5.2, one line to the core's timer input | 3.4 |
 | Flags side-band through fetch and decode | `Thumb.scala`, `ThumbFetcher.scala` (`THUMBV`) | built | 4.2 |

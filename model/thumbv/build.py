@@ -32,6 +32,8 @@ COREMARK = REPO / "third_party" / "coremark"
 EMBENCH = REPO / "third_party" / "embench-iot"
 CMSIS_DSP = REPO / "third_party" / "CMSIS-DSP"
 CMSIS_CORE = REPO / "third_party" / "CMSIS_6" / "CMSIS" / "Core" / "Include"
+FREERTOS = REPO / "third_party" / "FreeRTOS-Kernel"
+FREERTOS_PORT = FREERTOS / "portable" / "GCC" / "RISC-V"
 # picolibc, the C library for the RISC-V side where one is needed (Phase 5.4):
 # Debian's picolibc-riscv64-unknown-elf package.
 PICOLIBC = Path("/usr/lib/picolibc/riscv64-unknown-elf")
@@ -215,6 +217,39 @@ def cmsis_dsp_library(kind: str, out_dir: Path = REPO / "build" / "cmsis-dsp") -
     Path(str(archive) + ".tmp").rename(archive)
     stamp.write_text(" ".join(flags))
     return archive
+
+
+# --- FreeRTOS (Phase 5.5) ----------------------------------------------------------
+
+def freertos_sources() -> list[Path]:
+    """The kernel, its RISC-V port with heap_4, and Thumb-V's glue
+    (firmware/freertos/: the SysTick tick, NZCV in the context). For the
+    RISC-V side of a program that also links the firmware."""
+    return [*(FREERTOS / f for f in ("tasks.c", "queue.c", "list.c")),
+            FREERTOS / "portable" / "MemMang" / "heap_4.c",
+            FREERTOS_PORT / "port.c", FREERTOS_PORT / "portASM.S",
+            FIRMWARE_DIR / "freertos" / "thumbv_freertos.c"]
+
+
+def freertos_flags() -> list[str]:
+    """RISC-V compiler flags for the kernel and code that includes its headers:
+    FreeRTOSConfig.h and the chip extension from firmware/freertos/, and
+    picolibc's headers (the kernel uses string.h). Zicsr for the port's
+    inline CSR instructions; the interrupt stack is main's stack, whose top
+    the linker script gives. Unused kernel functions are dropped, so that the
+    board's 16 KiB for RISC-V code holds the kernel and a program."""
+    rv_libc()
+    return ["-march=rv32im_zicsr", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections", f"-I{FIRMWARE_DIR / 'freertos'}", f"-I{FREERTOS / 'include'}",
+            f"-I{FREERTOS_PORT}", "-isystem", str(PICOLIBC / "include"),
+            "-Wl,--defsym=__freertos_irq_stack_top=__stack_top"]
+
+
+def rtos_program(out_dir: Path, defines=()) -> tuple[Path, Path]:
+    """The FreeRTOS program (tests/c/rtos_main.c): two Thumb tasks from
+    rtos_thumb.c beside RISC-V tasks. `defines` (-D...) set RTOS_ROUNDS,
+    RTOS_PAUSE, configTICK_RATE_HZ, or THUMBV_FREERTOS_NO_NZCV."""
+    return mixed_program(["rtos_thumb.c"], ["rtos_main.c", *freertos_sources()], out_dir, "rtos.h",
+                         firmware=True, rv_flags=[*freertos_flags(), *defines], rv_libs=rv_libc())
 
 
 def coremark(out_dir: Path, iterations: int = 1) -> Path:

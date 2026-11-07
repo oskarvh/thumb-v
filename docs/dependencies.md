@@ -50,7 +50,7 @@ Unicorn is GPL-2.0 while the project is Apache-2.0. That's fine for a developmen
 | Embench IoT | additional benchmark programs. Submodule `third_party/embench-iot`, pinned at `09c2ed8`; only built and run, never modified or copied into the repo | Phase 0.5 | GPL-3.0 |
 | CMSIS-DSP | a prebuilt Cortex-M0 library called from RISC-V (Phase 5.4). Submodule `third_party/CMSIS-DSP`, pinned at v1.18.0 (`4b6f2659`); built, never modified | Phase 5.4 | Apache-2.0 |
 | CMSIS_6 | CMSIS-Core headers for CMSIS-DSP's Cortex-M0 build. Submodule `third_party/CMSIS_6`, pinned at v6.4.0 (`af1b110e`) | Phase 5.4 | Apache-2.0 |
-| FreeRTOS or Zephyr | RTOS with Thumb tasks | Phase 5 | MIT / Apache-2.0 |
+| FreeRTOS kernel | the RTOS with Thumb tasks (Phase 5.5): its RISC-V port, with Thumb-V's glue in `firmware/freertos/`. Submodule `third_party/FreeRTOS-Kernel`, pinned at V11.3.3 (`89592801`); built, never modified. Its own submodules (partner and community ports) aren't needed | Phase 5.5 | MIT |
 
 ## Hardware
 

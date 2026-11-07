@@ -65,3 +65,40 @@ All in `tests/test_rtl.py`, on the RTL in lockstep with the model:
   - the latency.
 - **`test_firmware_faults`** (`fault_main.c`): the default reports for `BKPT`, `ebreak` and a Thumb load fault.
 - **`test_firmware_systick_tick`** (`tick_main.c`, `tick_thumb.c`): the board program for its first two ticks. On the board it's `make board PROGRAM=tick`: a Thumb SysTick handler at 10 Hz counts on the LEDs, and RISC-V prints each tick.
+
+## FreeRTOS
+
+`firmware/freertos/` runs the FreeRTOS kernel (`third_party/FreeRTOS-Kernel`, V11.3.3, unmodified) on Thumb-V with its own RISC-V port (Phase 5.5). The port's trap handler replaces the entry routine as `mtvec`. The firmware still provides the API, the dispatch and the fault reports.
+
+| File | What |
+|---|---|
+| `freertos_risc_v_chip_specific_extensions.h` | The port's hook for chip registers: NZCV in every task's context |
+| `thumbv_freertos.c` | The tick, the interrupt and exception handlers, and the kernel's hooks |
+| `FreeRTOSConfig.h` | Sized for the board; programs can override the tick rate and heap size |
+
+Programs build with `build.freertos_sources()` and `build.freertos_flags()`. `build.rtos_program()` is the demo.
+
+- **The tick** is SysTick, at the lowest priority, as on Cortex-M. There's no `mtime`. `vPortSetupTimerInterrupt` sets `mtvec` to the port's handler, enables `mie.MEIE` and starts SysTick at `configCPU_CLOCK_HZ / configTICK_RATE_HZ`.
+- **Interrupts:** the controller's line reaches the port as an application interrupt. `freertos_risc_v_application_interrupt_handler` then:
+  1. claims the exception;
+  2. for SysTick, calls `xTaskIncrementTick` and switches tasks if it says to; for anything else, calls the handler set with `thumbv_set_handler` (either instruction set);
+  3. completes the exception.
+
+  The port doesn't nest interrupts: handlers run on the interrupt stack (main's old stack) with interrupts disabled.
+- **NZCV:** the port saves one extra word per task, between `mepc` and `mstatus`, so its frame is 128 bytes. RISC-V code never touches the flags. A Thumb task preempted between a compare and its branch would otherwise resume with the flags of whichever Thumb task ran last.
+- **Thumb tasks** are Cortex-M0 functions, `void task(void *)`, created with `xTaskCreate` like any other. They call the kernel's API by name through the import table: the kernel is RISC-V code, and its signatures pass arguments the same way in both ABIs (`tests/c/rtos.h`).
+  - They don't use the kernel's headers, which belong to the RISC-V port.
+  - They must not execute `SVC`: the port treats every `ecall` as a yield and resumes 4 bytes on. They yield through the API instead, which `ecall`s from RISC-V code.
+- **Faults,** failed assertions, stack overflows and a full heap are reported over the UART, and the program stops.
+
+**The demo** (`tests/c/rtos_main.c`, `rtos_thumb.c`, `rtos_work.h`):
+- a RISC-V producer puts 8 jobs a round on a queue;
+- two Thumb tasks running the same function take the jobs, compute (a loop of signed and unsigned compares and branches), and put the results on a second queue;
+- a RISC-V checker at a higher priority recomputes each result in RISC-V and prints a line a round;
+- a RISC-V spinner computes too, with a one-tick delay each step, so the idle task runs as well.
+
+Everything else runs at the same priority, time-sliced by the tick.
+- **On the RTL** (`test_freertos`): two rounds, ticking every 3,000 cycles, with the board's RAMs, in lockstep with the model (262,000 instructions). There are 252 traps, 82 of them in Thumb code, and no wrong results.
+- **The negative control** (`test_freertos_needs_nzcv_in_the_context`): built without the NZCV save, 5 of 16 results are wrong.
+- **On the board:** `make board PROGRAM=rtos`, at a 1 kHz tick, prints a round every 0.5 s with no errors, both Thumb tasks taking jobs.
+- **Size:** 13.8 KB of RISC-V code with unused kernel functions dropped, which fits the board's 16 KiB. 6.6 KB of RISC-V data, 6 KiB of which is the heap. The Thumb task is 148 bytes.

@@ -6,6 +6,7 @@ without them unless THUMBV_REQUIRE_RTL=1.
 
 import dataclasses
 import math
+import re
 import struct
 from pathlib import Path
 from types import SimpleNamespace
@@ -558,6 +559,48 @@ def test_cmsis_dsp(rtl_simulator, build_mixed, build_c, cmsis_dsp, tmp_path):
     sin = lambda name: struct.unpack("<f", struct.pack("<I", v[name]))[0]
     assert abs(sin("arm_sin_f32(0.5)") - math.sin(0.5)) < 1e-5
     assert abs(sin("arm_sin_f32(-2)") - math.sin(-2)) < 1e-5
+
+
+RTOS_SIM = ["-DRTOS_ROUNDS=2", "-DRTOS_PAUSE=2", "-DconfigTICK_RATE_HZ=4000"]
+
+
+def test_freertos(rtl_simulator, build_rtos, tmp_path):
+    """Phase 5.5: FreeRTOS's RISC-V port, ticked by SysTick through the
+    controller, running two Thumb tasks (Cortex-M0 code calling the queue API
+    by name) beside RISC-V tasks, in lockstep with the model and with the
+    board's RAMs. A tick every 3,000 cycles time-slices the tasks; the RISC-V
+    checker recomputes every result."""
+    images = [elf.load(p) for p in build_rtos(RTOS_SIM)]
+    out = tmp_path / "run"
+    out.mkdir()
+    result = run(images, out, memories=rtlsim.BOARD)
+    assert result.a0 == 0, result.uart                  # no wrong results
+    lines = result.uart.splitlines()
+    assert lines[0] == "FreeRTOS: two Thumb tasks beside RISC-V tasks"
+    rounds = [re.fullmatch(r"round (\w+): Thumb tasks (\w+) (\w+), errors (\w+), checksum \w+, "
+                           r"tick \w+, spins (\w+)", line) for line in lines[1:]]
+    assert len(rounds) == 2 and all(rounds), result.uart
+    for r in rounds:
+        jobs = [int(r[2], 16), int(r[3], 16)]
+        assert sum(jobs) == 8 and min(jobs) > 0          # both Thumb tasks did jobs
+        assert int(r[4], 16) == 0
+    assert int(rounds[-1][5], 16) > 0                   # and the RISC-V spinner ran
+    assert rtlsim.lockstep(images, result) is None
+
+    # Preempted in Thumb code, and switched: the trap handler entered from
+    # the Thumb region, with the flags of the other Thumb task live meanwhile.
+    handler = images[0].symbols["freertos_risc_v_trap_handler"]
+    entries = [i for i, r in enumerate(result.trace) if r.pc == handler]
+    from_thumb = [i for i in entries if thumb_region(images, result.trace[i - 1].pc)]
+    assert len(entries) > 200 and len(from_thumb) > 50
+
+
+def test_freertos_needs_nzcv_in_the_context(rtl_simulator, build_rtos, tmp_path):
+    """The negative control: without NZCV in the context, a Thumb task resumes
+    with the other's flags and some results are wrong."""
+    images = [elf.load(p) for p in build_rtos([*RTOS_SIM, "-DTHUMBV_FREERTOS_NO_NZCV"])]
+    result = run(images, tmp_path, trace=False)
+    assert result.a0 > 0, result.uart
 
 
 def thumb_region(images, addr):

@@ -111,6 +111,18 @@ def cmsis_dsp():
 
 
 @pytest.fixture
+def build_rtos(tmp_path):
+    """The FreeRTOS program: build_rtos(defines=(), name="rtos") -> (rv_elf, thumb_elf), built
+    in tmp_path/name; see build.rtos_program."""
+
+    def make(defines=(), name="rtos"):
+        (tmp_path / name).mkdir(exist_ok=True)
+        return build.rtos_program(tmp_path / name, defines)
+
+    return _tools(make)
+
+
+@pytest.fixture
 def build_bench(tmp_path):
     """Build benchmarks: build_bench.coremark(), .embench(name) or .float_kernels()."""
 

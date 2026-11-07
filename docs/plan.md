@@ -543,11 +543,22 @@ Goal: interrupts and traps work across both instruction sets through one control
      - **What it found:** `arm-none-eabi` uses 1-byte enums, while RISC-V's are 4 bytes. That's harmless for arguments and results but not in structs, so interfaces declare enums by their Thumb size, and the interworking doc's "same type sizes" now has that exception. The test checks the negative `arm_status` values cross correctly sign-extended.
      - **The test:** `test_cmsis_dsp`, in lockstep on the RTL, prints exactly what the all-RISC-V build prints, with a few values checked against their definitions. On the board, `make board PROGRAM=dsp` prints the same.
      - **New host dependency:** picolibc for the RISC-V side, which had no C library (CI installs it too).
-5. **An RTOS with a Thumb task.**
+5. **An RTOS with a Thumb task.** (done)
    - **The RTOS:** FreeRTOS (MIT), RISC-V port, ticked by SysTick through the controller.
    - **The context switch** also saves NZCV, so a Thumb task can be preempted between a compare and its branch.
    - **The tasks:** one Thumb task (compiled for Cortex-M0) and RISC-V tasks, exchanging data through a queue.
    - **Checked:** on the RTL, then on the board.
+   - **Done** ([firmware.md](firmware.md#freertos)):
+     - **The kernel:** FreeRTOS V11.3.3 (`third_party/FreeRTOS-Kernel`), unmodified, with its own RISC-V port. Thumb-V's glue is in `firmware/freertos/`:
+       - SysTick as the tick, through the controller;
+       - the port's application interrupt handler claims, ticks or dispatches, and completes;
+       - NZCV in each task's context, through the port's chip-extension hook (one word; the frame is 128 bytes).
+     - **The program:** two instances of one Cortex-M0 task beside three RISC-V tasks, through two queues. The Thumb task calls `xQueueReceive`/`xQueueGenericSend` by name through the import table.
+     - **On the RTL** (`test_freertos`): in lockstep with the model and with the board's RAMs. 252 traps, 82 of them in Thumb code, both Thumb tasks doing jobs, every result checked in RISC-V.
+     - **Negative control:** without NZCV in the context, 5 of 16 results are wrong.
+     - **On the board:** `make board PROGRAM=rtos` runs at a 1 kHz tick with no errors.
+     - **Size:** 13.8 KB of RISC-V code with unused kernel functions dropped (`--gc-sections`), under the board's 16 KiB.
+     - **A limit:** the port takes every `ecall` as a yield and resumes 4 bytes on, so Thumb tasks yield through the API, not with `SVC`.
 
 **Exit criteria:**
 - The controller matches its model.
@@ -596,6 +607,6 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board). Phase 3 is done: 3.1–3.3 (the sequencer and every multi-op expansion), 3.4 (interrupts at Thumb boundaries), 3.5 (calls in both directions, in simulation and on the board). Phase 4: 4.1 (strategy C in the model), 4.2 (the flags unit and flag writers in the RTL), 4.3 (the flag readers: the RTL is now all of strategy C), 4.4 (gcc code with loops, CoreMark and Embench on the RTL; loops on the board). Phase 5: 5.1 (the model takes traps; the RTL lockstep follows the core into them), 5.2 (the interrupt controller and SysTick in the RTL), 5.3 (the firmware's entry routine: handlers of both instruction sets, SVC, faults; a Thumb SysTick handler on the board), 5.4 (CMSIS-DSP's Cortex-M0 build called from RISC-V, in simulation and on the board).
+Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board). Phase 3 is done: 3.1–3.3 (the sequencer and every multi-op expansion), 3.4 (interrupts at Thumb boundaries), 3.5 (calls in both directions, in simulation and on the board). Phase 4: 4.1 (strategy C in the model), 4.2 (the flags unit and flag writers in the RTL), 4.3 (the flag readers: the RTL is now all of strategy C), 4.4 (gcc code with loops, CoreMark and Embench on the RTL; loops on the board). Phase 5: 5.1 (the model takes traps; the RTL lockstep follows the core into them), 5.2 (the interrupt controller and SysTick in the RTL), 5.3 (the firmware's entry routine: handlers of both instruction sets, SVC, faults; a Thumb SysTick handler on the board), 5.4 (CMSIS-DSP's Cortex-M0 build called from RISC-V, in simulation and on the board), 5.5 (FreeRTOS with Thumb tasks beside RISC-V tasks, in simulation and on the board). Phase 5 is done.
 
-1. Phase 5, step 5: FreeRTOS with a Thumb task beside RISC-V tasks.
+1. Plan Phase 6: ARM-only mode.

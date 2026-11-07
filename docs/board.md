@@ -9,6 +9,7 @@ make board PROGRAM=callback     # ...and Thumb calls back into RISC-V (Phase 3.5
 make board PROGRAM=loops        # gcc-compiled Thumb loops and conditions (Phase 4.4)
 make board PROGRAM=tick         # a Thumb SysTick handler at 10 Hz, through the firmware (Phase 5.3)
 make board PROGRAM=dsp          # RISC-V calls CMSIS-DSP's Cortex-M0 build (Phase 5.4)
+make board PROGRAM=rtos         # FreeRTOS: two Thumb tasks beside RISC-V tasks (Phase 5.5)
 make board PROGRAM=blinky       # counts on the LEDs, forever
 make board ELF="a.elf b.elf"    # any program built with tests/link/rv32.ld (and thumb_lib.ld)
 ```
