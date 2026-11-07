@@ -15,7 +15,7 @@ TRAP_CSRS = {0x304: 0, 0x305: 0x20, 0x340: 0, 0x341: 0, 0x342: 0, 0x343: 0}  # m
 THUMB_REGION0 = 0x7C0
 THUMB_REGIONS = 2
 MSTATUS_MIE = 1 << 3
-MSTATUS_MPP = 3 << 11   # machine mode, the only one: hard-wired, as on VexRiscv
+MSTATUS_MPP = 3 << 11   # machine mode: reset value and trap entry; mret clears it, as on VexRiscv
 # The flags unit's NZCV (strategy C), custom machine read/write: bits 31:28
 # as in the APSR, the rest read as zero.
 NZCV = 0x7C4

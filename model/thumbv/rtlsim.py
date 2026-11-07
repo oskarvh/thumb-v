@@ -25,6 +25,7 @@ from .build import REPO, ToolMissing
 from .expander import Options
 from .lockstep import Divergence, Layout, _load_model, describe
 from .machine import PAGE, Trap
+from .rv32 import MSTATUS_MIE
 
 CORE = REPO / "build" / "rtl" / "VexRiscv.v"
 SIM_DIR = REPO / "build" / "sim"
@@ -34,6 +35,10 @@ SOURCES = [CORE, *sorted((REPO / "rtl" / "soc").glob("*.v")), REPO / "sim" / "tb
 CODE_REGION = (0x0000_0000, 0x4_0000)
 DATA_REGION = (0x2000_0000, 0x1_0000)
 IO_BASE, IO_SIZE = 0x1000_0000, 16
+# Devices, whose loads the model takes from the RTL's trace: the I/O
+# registers, the interrupt controller's CLAIM/COMPLETE and the System
+# Control Space (base, size in bytes).
+DEVICES = [(IO_BASE, IO_SIZE), (0x1000_1000, 8), (0xE000_E000, 0x1000)]
 
 
 @dataclass(frozen=True)
@@ -101,6 +106,34 @@ def expand_rtl(queries, out_dir: Path) -> list[tuple[int, bool]]:
     subprocess.run([str(sim), f"+in={inputs}", f"+out={outputs}"], check=True, capture_output=True)
     words = outputs.read_text().split()
     return [(int(op, 16), last == "1") for op, last in zip(words[::2], words[1::2])]
+
+
+NVIC_SOURCES = [REPO / "rtl" / "soc" / "thumbv_nvic.v", REPO / "sim" / "nvic_tb.sv"]
+
+
+def nvic_simulator() -> Path:
+    """The testbench for the interrupt controller alone (sim/nvic_tb.sv), built if out of date."""
+    if shutil.which("verilator") is None:
+        raise ToolMissing("verilator")
+    build_dir = SIM_DIR / "nvic"
+    binary = build_dir / "obj_dir" / "nvic_tb"
+    if not binary.exists() or binary.stat().st_mtime < max(s.stat().st_mtime for s in NVIC_SOURCES):
+        build_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["verilator", "--binary", "--timing", "-j", "0", "--top-module", "nvic_tb",
+                        "-o", "nvic_tb", *map(str, NVIC_SOURCES)],
+                       cwd=build_dir, check=True, capture_output=True)
+    return binary
+
+
+def run_nvic(cycles, out_dir: Path) -> list[tuple[int, bool]]:
+    """The controller's (read data, irq) after each cycle of `cycles`:
+    [(op, addr, data, lines)], op 0 none, 1 read, 2 write."""
+    sim = nvic_simulator()
+    inputs, outputs = out_dir / "nvic_in.txt", out_dir / "nvic_out.txt"
+    inputs.write_text("".join(f"{op:x} {a:x} {d:x} {l:x}\n" for op, a, d, l in cycles))
+    subprocess.run([str(sim), f"+in={inputs}", f"+out={outputs}"], check=True, capture_output=True)
+    words = outputs.read_text().split()
+    return [(int(v, 16), irq == "1") for v, irq in zip(words[::2], words[1::2])]
 
 
 def memory_images(images, out_dir: Path, memories: Memories = SIM, suffix: str = ".hex") -> tuple[Path, Path]:
@@ -225,12 +258,18 @@ def thumb_boot(thumb: elf.Image) -> elf.Image:
     return elf.Image("EM_RISCV", RESET_VECTOR, [elf.Segment(RESET_VECTOR, code, True)], {}, {})
 
 
-def lockstep(images, result: Result, options: Options = HARDWARE) -> Divergence | None:
+# The interrupt the core takes: the machine external interrupt, which the
+# interrupt controller drives (rtl/soc/thumbv_nvic.v, Phase 5.2).
+EXTERNAL_INTERRUPT = 11
+
+
+def lockstep(images, result: Result, options: Options = HARDWARE,
+             interrupt: int = EXTERNAL_INTERRUPT) -> Divergence | None:
     """Replay the RTL's retire trace against the model; the first difference, if any."""
-    return replay(images, result, options)[0]
+    return replay(images, result, options, interrupt)[0]
 
 
-def replay(images, result: Result, options: Options = HARDWARE):
+def replay(images, result: Result, options: Options = HARDWARE, interrupt: int = EXTERNAL_INTERRUPT):
     """lockstep(), and the model it ran: (divergence or None, Machine). Without
     a divergence, the model's state is the RTL's, memory included, so a test
     can read a program's results from it.
@@ -238,10 +277,17 @@ def replay(images, result: Result, options: Options = HARDWARE):
     The RTL retires each op of a Thumb instruction as its own record, all with
     the instruction's address (PC-hold), so the model runs Thumb code one op
     at a time too: op k of its expansion against record k.
+
+    Traps (Phase 5.1): a trapping op doesn't retire, so the trace goes on at
+    the trap vector instead. There, the model runs its op on a snapshot: if
+    the op traps, it was that synchronous trap; if not, the model rolls back
+    and takes `interrupt`, which must be at an instruction boundary (op 0)
+    with interrupts enabled. FormalPlugin doesn't flag interrupts itself.
     """
     layout = Layout.for_images(images)
     m = _load_model(images, layout, options)
-    m.mem.map(IO_BASE, PAGE)
+    for base, size in DEVICES:
+        m.mem.map(base & ~(PAGE - 1), PAGE)
     m.pc = images[0].entry & ~1
     trace, i = result.trace, 0
     while i < len(trace):
@@ -257,11 +303,17 @@ def replay(images, result: Result, options: Options = HARDWARE):
         else:
             ops, length, n = [m.mem.read(pc, 4)], 4, 4
         insn = m.mem.read(pc, n)
-        target = None
-        for op in ops:
+        target, trapped = None, False
+        for k, op in enumerate(ops):
             if i == len(trace):
                 return None, m                    # the run ended part-way through
             r = trace[i]
+            if r.pc != pc and r.pc == m.trap_vector:
+                problem = _enter_trap(m, op, k, pc, length, interrupt)
+                if problem:
+                    return (Divergence(i, r.pc, describe(m, layout, pc), [problem]), m)
+                trapped = True
+                break
             problems = []
             if r.pc != pc:
                 problems.append(f"pc: model {pc:#010x}, RTL {r.pc:#010x}")
@@ -269,7 +321,7 @@ def replay(images, result: Result, options: Options = HARDWARE):
                 problems.append(f"instruction: model {insn:#0{2 + 2 * n}x}, RTL {r.insn:#010x}")
             if problems:
                 return (Divergence(i, r.pc, describe(m, layout, r.pc), problems), m)
-            if r.rmask and IO_BASE <= r.mem_addr < IO_BASE + IO_SIZE:
+            if r.rmask and any(base <= r.mem_addr < base + size for base, size in DEVICES):
                 m.mem.write(r.mem_addr, 4, r.rdata)   # what the device returned
             before = list(m.x)
             m.mem.log = []
@@ -291,8 +343,28 @@ def replay(images, result: Result, options: Options = HARDWARE):
             if problems:
                 return (Divergence(i, r.pc, describe(m, layout, r.pc), problems), m)
             i += 1
-        m.pc = target if target is not None else (pc + length) & 0xFFFF_FFFF
+        if not trapped:
+            m.pc = target if target is not None else (pc + length) & 0xFFFF_FFFF
     return None, m
+
+
+def _enter_trap(m, op, k, pc, length, interrupt) -> str | None:
+    """The RTL went to the trap vector instead of retiring op k of the
+    instruction at pc: take the same trap in the model. A problem, or None."""
+    state = m.snapshot()
+    try:
+        m.execute(op, pc, link=pc + length)
+    except Trap as trap:
+        m.restore(state)
+        m.take_trap(trap)
+        return None
+    m.restore(state)
+    if k:
+        return f"RTL trapped at op {k}, which doesn't trap in the model (interrupts only between instructions)"
+    if not m.mstatus & MSTATUS_MIE:
+        return "RTL took an interrupt with mstatus.MIE clear"
+    m.interrupt(interrupt)
+    return None
 
 
 def _bytes(stores):

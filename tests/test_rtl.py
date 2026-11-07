@@ -5,6 +5,9 @@ without them unless THUMBV_REQUIRE_RTL=1.
 """
 
 import dataclasses
+import math
+import re
+import struct
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -237,7 +240,8 @@ def test_thumb_flag_readers(rtl_simulator, build_mixed, tmp_path):
 
 def check_interrupts(images, tmp_path, seed):
     """Run `images` (an irq_*main.c program) without and with interrupts
-    (sim/tb.sv +irq): the same result, and every interrupt between two
+    (sim/tb.sv +irq): the same result, both in lockstep with the model (which
+    takes each interrupt where the core did), and every interrupt between two
     instructions, none of whose ops ran before it. Returns the interrupts
     taken: [(mepc, ops the interrupted instruction then ran)], Thumb ones only."""
     (tmp_path / "quiet").mkdir()
@@ -247,6 +251,9 @@ def check_interrupts(images, tmp_path, seed):
     assert rtlsim.lockstep(images, quiet) is None
     noisy = run(images, tmp_path / "irq", irq=seed)
     assert noisy.status == "EXIT" and noisy.a0 == quiet.a0
+    # Phase 5.1: the run with interrupts, in lockstep too, handler included.
+    divergence = rtlsim.lockstep(images, noisy)
+    assert divergence is None, str(divergence)
 
     entry, read_mepc, mret = (images[0].symbols[s] for s in ("irq_handler", "irq_mepc", "irq_mret"))
     trace = noisy.trace
@@ -321,7 +328,7 @@ def test_gcc_loops(rtl_simulator, build_mixed, build_c, tmp_path):
     names = {name for (pc, name), n in thumb_instructions_run(images, result).items()}
     assert names >= {"B_cond", "CMP_imm", "CMP_reg", "ADCS", "TST", "MULS"}, names
     assert f"checksum           = {result.a0:08x}" in result.uart
-    native = elf.load(build_c("rv32", "irq_loops_main.c", "loops_run.c", "loops.c", "irq_handler.S"))
+    native = elf.load(build_c("rv32", "loops_check_main.c", "loops_run.c", "loops.c"))
     reference = lockstep.simulate([native], stop=native.symbols["done"])
     assert reference.stopped == "stop address"
     assert reference.final_regs[0] == 2 * result.a0 & 0xFFFF_FFFF    # it runs them twice
@@ -400,6 +407,204 @@ def test_float_kernels(rtl_simulator, build_bench, tmp_path):
     image, result, model = run_thumb_program(build_bench.float_kernels(), tmp_path, max_cycles=100_000_000)
     reference = lockstep.simulate([image], stop=image.symbols["done"])
     assert result.a0 == reference.final_regs[0]
+
+
+def test_synchronous_traps(rtl_simulator, build_mixed, tmp_path):
+    """Phase 5.1: traps from Thumb code (SVC, BKPT, UDF, a trapping MRS,
+    misaligned and faulting loads and stores, one at op 1 of its expansion)
+    and from RISC-V (ecall, ebreak), handled and resumed, in lockstep with
+    the model, which takes the same traps. The records the handler keeps are
+    checked against what the architecture says."""
+    rv_elf, thumb_elf = build_mixed(["trap_lib.S"], ["trap_main.c", "trap_handler.S"])
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    assert result.status == "EXIT"
+    divergence, model = rtlsim.replay(images, result)
+    assert divergence is None, str(divergence)
+    alone = lockstep.simulate(images, stop=images[0].symbols["done"], options=rtlsim.HARDWARE, traps=True)
+    assert alone.stopped == "stop address" and alone.final_regs[0] == result.a0
+
+    rv, thumb = images
+    words = lambda name, n: [int.from_bytes(model.mem.read_bytes(rv.symbols[name] + 4 * k, 4), "little")
+                             for k in range(n)]
+    n = words("nrecords", 1)[0]
+    records = [tuple(words("records", 4 * n)[4 * k:4 * k + 4]) for k in range(n)]
+    fn = lambda name: thumb.functions[name] & ~1
+    expected = [
+        (11, fn("t_svc"), rv32.ecall(), 42),           # ecall: mtval is the instruction
+        (3, fn("t_bkpt"), rv32.ebreak(), 7),
+        (2, fn("t_udf"), 0, 0),                     # the illegal instruction: 0
+        (2, fn("t_mrs_msp") + 2, 0, 0),             # after its MOVS
+    ]
+    assert records[:4] == expected, records
+    causes = [rec[0] for rec in records]
+    assert causes == [11, 3, 2, 2, 4, 4, 5, 6, 11, 3], causes
+    assert records[4][1] == fn("t_load") and records[4][2] & 3 == 1        # misaligned address
+    assert records[5][1] == fn("t_load_reg") and records[5][2] & 3 == 2    # at op 1: base + offset
+    assert records[6][1:3] == (fn("t_load"), 0x3000_0000)                   # access fault
+    assert records[7][1] == fn("t_store") and records[7][2] & 3 == 2
+    assert not thumb_region(images, records[8][1]) and records[8][2] == rv32.ecall()
+    assert words("results", 4) == [0, records[4][2], records[5][2] - 2, 0x3000_0000]
+
+
+def test_interrupt_controller(rtl_simulator, build_c, tmp_path):
+    """Phase 5.2: the controller from software on the SoC: a pended
+    interrupt (priority 1), PendSV (3) and SysTick (0), claimed in priority
+    order, in lockstep with the model (which takes the controller's values
+    from the trace)."""
+    path = build_c("rv32", "nvic_main.c", "trap_handler.S")
+    images = [elf.load(path)]
+    result = run(images, tmp_path)
+    assert result.status == "EXIT"
+    divergence, model = rtlsim.replay(images, result)
+    assert divergence is None, str(divergence)
+    words = lambda name, n: [int.from_bytes(model.mem.read_bytes(images[0].symbols[name] + 4 * k, 4), "little")
+                             for k in range(n)]
+    n = words("nclaimed", 1)[0]
+    # Interrupt 3 (exception 19) first, then PendSV (14), by priority; then
+    # five SysTicks (15), the first some 300 cycles after SysTick starts.
+    assert words("claimed", n) == [19, 14, 15, 15, 15, 15, 15]
+    assert words("active_seen", n) == words("claimed", n)       # VECTACTIVE while active
+
+
+def uart_values(uart):
+    """{label: value} from lines "label: hex"."""
+    out = {}
+    for line in uart.splitlines():
+        label, _, value = line.rpartition(":")
+        if label:
+            out[label.strip()] = int(value, 16)
+    return out
+
+
+def test_firmware_interrupts(rtl_simulator, build_mixed, tmp_path):
+    """Phase 5.3: the firmware's entry routine (firmware/), in lockstep:
+    a Thumb SysTick handler (compiled for Cortex-M0) interrupting RISC-V
+    code, a RISC-V one interrupting Thumb code, and a Thumb one that changes
+    the flags interrupting Thumb code (NZCV saved: without it, checked by
+    hand, the third result is wrong); preemption by priority and PendSV;
+    SVC from Thumb and ecall from RISC-V; the interrupt latency."""
+    rv_elf, thumb_elf = build_mixed(["irq_mixed_thumb.c"], ["irq_mixed_main.c"], firmware=True)
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    assert result.status == "EXIT"
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    v = uart_values(result.uart)
+    assert v["thumb handler, riscv code"] == v["riscv handler, thumb code"] == v["thumb handler, thumb code"] == 1
+    # Enough interrupts in each case (the labels repeat, so read them all).
+    ticks = [int(line.rpartition(":")[2], 16) for line in result.uart.splitlines() if "ticks" in line]
+    assert len(ticks) == 3 and min(ticks) > 100, ticks
+    # Interrupt 1 enters, 2 preempts it, 1 leaves; then 3 (same priority as 1) and PendSV.
+    assert v["order (12345)"] == 0x12345
+    assert v["svc #1 (20, 22)"] == 42 and v["svc #2 (6, 7)"] == 42 and v["ecall 1 (100, 23)"] == 123
+    # From SysTick pending to the C handler's first load: 80 cycles in 5.3.
+    assert v["latency (cycles)"] <= 90, v["latency (cycles)"]
+
+
+def test_firmware_faults(rtl_simulator, build_mixed, tmp_path):
+    """Phase 5.3: the firmware's default reports: BKPT (Thumb) and ebreak
+    (RISC-V) reported and resumed, then a Thumb load fault reported and the
+    program stopped."""
+    rv_elf, thumb_elf = build_mixed(["trap_lib.S"], ["fault_main.c"], firmware=True)
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = run(images, tmp_path)
+    assert result.status == "EXIT"
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    fn = lambda name: images[1].functions[name] & ~1
+    lines = result.uart.splitlines()
+    assert lines[0] == f"thumbv: breakpoint at {fn('t_bkpt'):08x} (Thumb), mtval 00100073"
+    assert lines[1].startswith("thumbv: breakpoint at ") and lines[1].endswith("(RISC-V), mtval 00100073")
+    assert lines[2] == f"thumbv: load access fault at {fn('t_load'):08x} (Thumb), mtval 30000000"
+    assert len(lines) == 3
+
+
+def test_firmware_systick_tick(rtl_simulator, build_mixed, tmp_path):
+    """Phase 5.3: the board's SysTick program, simulated for its first two
+    ticks (10 Hz on the board's 12 MHz clock: 1.2 million cycles each)."""
+    rv_elf, thumb_elf = build_mixed(["tick_thumb.c"], ["tick_main.c"], firmware=True)
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    result = rtlsim.run(images, tmp_path, max_cycles=2_500_000, trace=False)
+    assert result.status == "TIMEOUT"                 # it runs forever
+    assert result.uart.splitlines()[:3] == ["SysTick at 10 Hz, Thumb handler", "tick 00000001",
+                                            "tick 00000002"]
+
+
+def test_cmsis_dsp(rtl_simulator, build_mixed, build_c, cmsis_dsp, tmp_path):
+    """Phase 5.4: RISC-V code calling CMSIS-DSP's Cortex-M0 build, linked as
+    a binary through the interface cmsis_dsp.h (three calls need thunks: a
+    fifth argument goes on the stack under AAPCS), in lockstep with the
+    model. It must print what the same program prints with CMSIS-DSP built
+    for RISC-V, and a few results are checked against their definitions."""
+    flags = build.cmsis_dsp_flags
+    rv_elf, thumb_elf = build_mixed([], ["dsp_main.c"], "cmsis_dsp.h", thumb_libs=[cmsis_dsp["thumb"]],
+                                    thumb_flags=flags("thumb"), rv_flags=flags("rv32"),
+                                    rv_libs=build.rv_libc())
+    images = [elf.load(rv_elf), elf.load(thumb_elf)]
+    (tmp_path / "mixed").mkdir()
+    result = run(images, tmp_path / "mixed")
+    divergence = rtlsim.lockstep(images, result)
+    assert divergence is None, str(divergence)
+    native = elf.load(build_c("rv32", "dsp_main.c", libs=[cmsis_dsp["rv32"], *build.rv_libc()],
+                              flags=flags("rv32")))
+    (tmp_path / "native").mkdir()
+    reference = run([native], tmp_path / "native")
+    assert result.uart == reference.uart
+    v = {line[:18].strip(): int(line[18:], 16) for line in result.uart.splitlines()[1:]}
+    assert v["arm_sqrt_q31"] == 0x4000_0000 and v["status"] == 0       # sqrt(0.25) = 0.5
+    assert v["negative"] == 0xFFFF_FFFF            # ARM_MATH_ARGUMENT_ERROR: a 1-byte enum, sign-extended
+    assert v["size mismatch"] == 0xFFFF_FFFD       # ARM_MATH_SIZE_MISMATCH
+    assert v["arm_fir_init_q15"] == 0 and v["arm_mat_mult_f32"] == 0
+    sin = lambda name: struct.unpack("<f", struct.pack("<I", v[name]))[0]
+    assert abs(sin("arm_sin_f32(0.5)") - math.sin(0.5)) < 1e-5
+    assert abs(sin("arm_sin_f32(-2)") - math.sin(-2)) < 1e-5
+
+
+RTOS_SIM = ["-DRTOS_ROUNDS=2", "-DRTOS_PAUSE=2", "-DconfigTICK_RATE_HZ=4000"]
+
+
+def test_freertos(rtl_simulator, build_rtos, tmp_path):
+    """Phase 5.5: FreeRTOS's RISC-V port, ticked by SysTick through the
+    controller, running two Thumb tasks (Cortex-M0 code calling the queue API
+    by name) beside RISC-V tasks, in lockstep with the model and with the
+    board's RAMs. A tick every 3,000 cycles time-slices the tasks; the RISC-V
+    checker recomputes every result."""
+    images = [elf.load(p) for p in build_rtos(RTOS_SIM)]
+    out = tmp_path / "run"
+    out.mkdir()
+    result = run(images, out, memories=rtlsim.BOARD)
+    assert result.a0 == 0, result.uart                  # no wrong results
+    lines = result.uart.splitlines()
+    assert lines[0] == "FreeRTOS: two Thumb tasks beside RISC-V tasks"
+    rounds = [re.fullmatch(r"round (\w+): Thumb tasks (\w+) (\w+), errors (\w+), checksum \w+, "
+                           r"tick \w+, spins (\w+)", line) for line in lines[1:]]
+    assert len(rounds) == 2 and all(rounds), result.uart
+    for r in rounds:
+        jobs = [int(r[2], 16), int(r[3], 16)]
+        assert sum(jobs) == 8 and min(jobs) > 0          # both Thumb tasks did jobs
+        assert int(r[4], 16) == 0
+    assert int(rounds[-1][5], 16) > 0                   # and the RISC-V spinner ran
+    assert rtlsim.lockstep(images, result) is None
+
+    # Preempted in Thumb code, and switched: the trap handler entered from
+    # the Thumb region, with the flags of the other Thumb task live meanwhile.
+    handler = images[0].symbols["freertos_risc_v_trap_handler"]
+    entries = [i for i, r in enumerate(result.trace) if r.pc == handler]
+    from_thumb = [i for i in entries if thumb_region(images, result.trace[i - 1].pc)]
+    assert len(entries) > 200 and len(from_thumb) > 50
+
+
+def test_freertos_needs_nzcv_in_the_context(rtl_simulator, build_rtos, tmp_path):
+    """The negative control: without NZCV in the context, a Thumb task resumes
+    with the other's flags and some results are wrong."""
+    images = [elf.load(p) for p in build_rtos([*RTOS_SIM, "-DTHUMBV_FREERTOS_NO_NZCV"])]
+    result = run(images, tmp_path, trace=False)
+    assert result.a0 > 0, result.uart
+
+
+def thumb_region(images, addr):
+    return any(lo <= addr < hi for img in images if img.is_thumb for lo, hi in img.code_ranges())
 
 
 def test_thumb_calls_back_into_riscv(rtl_simulator, build_mixed, tmp_path):

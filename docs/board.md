@@ -7,6 +7,9 @@ make board                      # hello world
 make board PROGRAM=leaf         # RISC-V calls gcc-compiled Thumb functions (Phase 2.4)
 make board PROGRAM=callback     # ...and Thumb calls back into RISC-V (Phase 3.5)
 make board PROGRAM=loops        # gcc-compiled Thumb loops and conditions (Phase 4.4)
+make board PROGRAM=tick         # a Thumb SysTick handler at 10 Hz, through the firmware (Phase 5.3)
+make board PROGRAM=dsp          # RISC-V calls CMSIS-DSP's Cortex-M0 build (Phase 5.4)
+make board PROGRAM=rtos         # FreeRTOS: two Thumb tasks beside RISC-V tasks (Phase 5.5)
 make board PROGRAM=blinky       # counts on the LEDs, forever
 make board ELF="a.elf b.elf"    # any program built with tests/link/rv32.ld (and thumb_lib.ld)
 ```
@@ -32,7 +35,7 @@ The FPGA's configuration is SRAM, so the board forgets the program at power-off.
 - **Aliasing:** each RAM repeats through its 256 KiB or 64 KiB region, so programs linked for the simulation run unchanged. A RISC-V program's code at `0x2_0000` lands at the start of the code RAM, and its stack at the top of the data region lands at the top of the data RAM.
 - **Collisions:** `thumbv.rtlsim.memory_images` refuses a program whose loaded parts would land on the same RAM byte.
 - **Mixed programs:** the Thumb library's window starts at `0x1_4000` (`tests/link/thumb_lib.ld`), so its code lands in the code RAM's upper 16 KiB and the RISC-V side's (`0x2_0000`) in the lower 16 KiB. Each side must stay under 16 KiB.
-- **Data:** the Thumb library's data (`0x2000_0000`) and the RISC-V side's (`0x2000_4000`) both land at the start of the 16 KiB data RAM, below the shared stack. So on the board, only one side may have data. Initialised data is caught by the collision check, but zeroed data (`.bss`) and the stack aren't loaded, so they aren't checked.
+- **Data:** the Thumb library's data (`0x2000_0000`, 8 KiB) lands in the data RAM's first 8 KiB, and the RISC-V side's (`0x2000_2000`, since Phase 5.3) in the second, under the shared stack. Before 5.3 both started at the RAM's first byte, so only one side could have data; the firmware gives every mixed program RISC-V data. Initialised data is caught by the collision check, but zeroed data (`.bss`) and the stack aren't loaded, so they aren't checked.
 - **Thumb-only programs** (`0x1_0000`, `tests/link/thumb.ld`) would collide with nothing, but they need RISC-V startup code to reach them: the reset vector is RISC-V code at `0x2_0000`.
 - **The same configuration in simulation:** `python -m thumbv.rtlsim --board` runs the board's RAM sizes in Verilator, and `tests/test_rtl.py` checks hello world with them.
 
@@ -64,4 +67,5 @@ The FPGA's configuration is SRAM, so the board forgets the program at power-off.
 - `tests/c/blinky.c` counts on the LEDs and prints the count about 3 times a second, forever (`PROGRAM=blinky`).
 - `tests/c/thumb_leaf_main.c` calls the gcc-compiled leaf Thumb functions in `tests/c/thumb_leaf.c` and prints their results (`PROGRAM=leaf`). The LEDs show the low byte of the results' sum, `0x9d`.
 - `tests/c/loops_main.c` and `tests/c/loops_run.c` call the gcc-compiled Thumb functions in `tests/c/loops.c`, all loops and conditions: CRC-32, a sort, a binary search, GCD, a population count, 64-bit Fibonacci and dot product, a chain of comparisons, `strcmp`, an integer square root (`PROGRAM=loops`). It prints each result and a checksum, `9f3e3f8e`, the same as in simulation.
+- `tests/c/tick_main.c` starts SysTick at 10 Hz with a Thumb handler, compiled for Cortex-M0, from `tests/c/tick_thumb.c`, through the firmware's entry routine ([firmware.md](firmware.md)). The handler counts on the LEDs, and RISC-V prints `tick 00000001`, `tick 00000002`, ... (`PROGRAM=tick`).
 - `tests/c/callback_main.c` and `tests/c/callback.c` call each other through the interface header `tests/c/callback.h` (`PROGRAM=callback`): Thumb code calls two RISC-V functions, reads a table through a literal pool and hands RISC-V a string to print.

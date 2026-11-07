@@ -5,7 +5,7 @@ Instructions for Ubuntu 24.04. Run `make check-tools` to see what is installed. 
 ## Phase 0: model and test programs
 
 ```sh
-sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi gcc-riscv64-unknown-elf
+sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf
 curl -LsSf https://astral.sh/uv/install.sh | sh   # if uv is missing
 make setup        # also fetches the CoreMark and Embench submodules
 make test
@@ -125,7 +125,7 @@ C:
 
 1. Put the source in `tests/c/`. There is no C library; libgcc is linked for helper routines.
 2. Build a Thumb-only or RV32-only program with `build_c("thumb", "my_test.c")` or `build_c("rv32", ...)`. This adds the startup file (`crt_thumb.S`/`crt_rv32.S`: set SP, call `main`, spin at `done`) and the linker script from `tests/link/`.
-3. Build a mixed program with `build_mixed(["lib.c"], ["main.c"])`. The Thumb library is linked first (code at `0x1_4000`, data at `0x2000_0000`; the RISC-V startup code marks `0x1_4000`–`0x2_0000` as a Thumb region); its global functions become absolute symbols in the RISC-V link (code at `0x20000`, data at `0x2000_4000`). The stack is shared, with its top at `0x2001_0000`.
+3. Build a mixed program with `build_mixed(["lib.c"], ["main.c"])`. The Thumb library is linked first (code at `0x1_4000`, data at `0x2000_0000`; the RISC-V startup code marks `0x1_4000`–`0x2_0000` as a Thumb region); its global functions become absolute symbols in the RISC-V link (code at `0x20000`, data at `0x2000_2000`). The stack is shared, with its top at `0x2001_0000`.
 4. For calls whose signatures the two ABIs pass differently, or for Thumb code that calls RISC-V functions by name, declare the functions in an interface header and pass it: `build_mixed([...], [...])` becomes `thumbv.build.mixed_program(thumb, rv, out_dir, interface="my.h")`. See [interworking.md](interworking.md) and `tests/test_interwork.py`.
 5. Run it with `thumbv.lockstep.run(images, stop=...)`. See `tests/test_lockstep_programs.py`.
 

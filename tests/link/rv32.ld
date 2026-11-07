@@ -4,7 +4,9 @@ ENTRY(_reset)   /* the core's reset vector, crt_rv32.S */
 MEMORY
 {
     ROM (rx)  : ORIGIN = 0x00020000, LENGTH = 64K
-    RAM (rwx) : ORIGIN = 0x20004000, LENGTH = 16K
+    /* Above the Thumb library's 8 KiB, so that on the board's 16 KiB data RAM
+       the two sides' data don't share bytes (docs/board.md). */
+    RAM (rwx) : ORIGIN = 0x20002000, LENGTH = 24K
 }
 
 __stack_top = 0x20010000;

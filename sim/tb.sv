@@ -8,7 +8,7 @@
 //   +trace=<file>   write one line per retired instruction (RVFI), see below
 //   +cycles=<n>     give up after n cycles (default 10,000,000)
 //   +wave=<file>    dump every signal to an FST waveform (GTKWave, Surfer)
-//   +irq=<seed>     raise the timer interrupt again and again, see below
+//   +irq=<seed>     raise interrupt line 0 again and again, see below
 //
 // The UART line is decoded here and printed to stdout. The run ends when the
 // core retires `j .` (0x0000006f) or Thumb's `b .` (0xe7fe, a halfword no
@@ -19,10 +19,12 @@
 // Trace lines, all hex: pc insn rd rd_wdata mem_addr mem_rmask mem_wmask
 // mem_rdata mem_wdata trap
 //
-// Interrupts (+irq): the testbench raises the core's timer interrupt after a
-// pseudo-random delay of 1 to 29 cycles, and holds it until the program
-// acknowledges with a store to 0x1000_000C (an unmapped I/O address: the SoC
-// drops the store, the testbench sees it). Then the next delay starts.
+// Interrupts (+irq): the testbench raises interrupt line 0 of the SoC's
+// interrupt controller (thumbv_nvic.v; before Phase 5.2, the core's timer
+// interrupt) after a pseudo-random delay of 1 to 29 cycles, and holds it
+// until the program acknowledges with a store to 0x1000_000C (an unmapped
+// I/O address: the SoC drops the store, the testbench sees it). Then the
+// next delay starts.
 
 `timescale 1ns / 1ps
 
@@ -43,7 +45,7 @@ module tb #(
 
     thumbv_soc #(.CODE_WORDS(CODE_WORDS), .DATA_WORDS(DATA_WORDS),
                  .UART_CLKS_PER_BIT(CLKS_PER_BIT)) dut (
-        .clk(clk), .reset(reset), .irq_timer(irq), .uart_tx(uart_tx), .leds(leds));
+        .clk(clk), .reset(reset), .irq({31'b0, irq}), .uart_tx(uart_tx), .leds(leds));
 
     string code_file, data_file, trace_file, wave_file;
     longint max_cycles = 10_000_000;

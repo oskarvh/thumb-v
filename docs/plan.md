@@ -457,14 +457,119 @@ Goal: every Thumb instruction runs in hardware with its ARM flags, using the har
 - A loop-heavy program runs on the board.
 - Resources and Fmax are logged.
 
+## Phase 5: Interrupts and mixed execution in practice
+
+Goal: interrupts and traps work across both instruction sets through one controller (D9) and one entry routine, and real software uses them: a Thumb interrupt handler from a Cortex-M-compiled object interrupting RISC-V code and the reverse, a prebuilt Cortex-M0 library called from RISC-V, and an RTOS running a Thumb task beside RISC-V tasks.
+
+**Design** (from section 6, D9 and [vexriscv-notes.md](vexriscv-notes.md#external-interrupts-and-vectoring-d9)):
+- **The controller** is a SoC block at the System Control Space, `0xE000_E000`, with the ARMv6-M programming model, so Cortex-M code drives it unmodified:
+  - **NVIC:** 32 interrupts, `ISER`/`ICER`/`ISPR`/`ICPR` at `0xE000_E100`–`0xE000_E280`, and 4 priority levels (`IPR0`–`IPR7` at `0xE000_E400`, the top 2 bits of each byte).
+  - **System exceptions:**
+    - SysTick (exception 15), PendSV (14), with their priorities in `SHPR3`;
+    - `ICSR` (`0xE000_ED04`): `PENDSVSET`/`PENDSVCLR`, `PENDSTSET`/`PENDSTCLR`, `VECTPENDING`.
+  - **Software interrupts:** every pending bit is writable, so software interrupts, RISC-V's included, are just pended interrupts.
+- **SysTick** is the standard ARMv6-M SysTick at `0xE000_E010` (`CSR`, `RVR`, `CVR`, `CALIB`), counting core clocks.
+  - **A change from section 6:** no second, `mtime`/`mtimecmp` view of the same timer. In mixed mode every interrupt goes through the one controller, RISC-V code included, so a CLINT-style timer would be a second path that nothing needs. The core's own timer input is tied off.
+- **To the core:** one line, the machine external interrupt (`mip.MEIP`, cause 11). It is raised while an enabled interrupt is pending above the current priority. No hardware vectoring yet: the entry routine dispatches.
+- **Claim and complete:** with software entry there's no hardware exception entry to track which interrupt is active, so the controller adds two Thumb-V registers outside the SCS, at `0x1000_1000`:
+  - **`CLAIM`** returns the number of the highest-priority pending interrupt above the current priority (0 if none), clears its pending bit and makes it active. Its priority becomes the current one, so only higher priorities can preempt.
+  - **`COMPLETE`** ends the active one.
+  - **Nesting:** active interrupts form a stack, at most 4 deep with 4 levels. Edge and level sources behave as on the NVIC: a level source still asserted when its handler completes pends again.
+  - **Ties:** equal priorities resolve to the lowest number, as on Cortex-M.
+- **The entry routine** (`firmware/`, RISC-V assembly and C) is `mtvec` for every trap.
+  - **Interrupts** (cause 11):
+    1. save the caller-saved registers, `mepc`, `mstatus` and NZCV (CSR `0x7C4`);
+    2. `CLAIM`, re-enable interrupts so higher priorities can preempt;
+    3. call the handler from a vector table of plain addresses (Thumb handlers return with `BX LR` into the routine);
+    4. disable interrupts, `COMPLETE`, restore, `mret`.
+  - **Synchronous traps:**
+    - `ecall` is `SVC` if `mepc` is in a Thumb region, with the number from the instruction's low byte, resuming 2 bytes on; from RISC-V it resumes 4 bytes on;
+    - `ebreak` (`BKPT`), illegal instructions and faults go to handlers that report and stop, for now.
+  - Interrupts are still taken only between Thumb instructions (D3, Phase 3.4).
+- **Verification:**
+  - **The controller** is checked on its own against a Python model of its registers (`model/thumbv/nvic.py`), like the expander: random sequences of register reads and writes, interrupt lines, claims and completes, in a Verilator testbench.
+  - **Whole programs:** the model takes traps and returns from them, so the lockstep covers interrupt-driven programs too. The model enters a trap where the RTL's trace jumps to `mtvec`, and reads the controller's registers as device inputs, as it does the UART's.
+
+**Steps:**
+1. **The model takes traps.** (done)
+   - **Traps and `mret`:** synchronous traps go to `mtvec` with `mepc`, `mcause` and `mtval`, instead of stopping the run; `mret` returns.
+   - **Asynchronous ones:** the RTL lockstep enters them where the RTL did. FormalPlugin doesn't flag interrupts (`rvfi_intr` is always 0), so this is where the trace reaches `mtvec` while the model expected another instruction, which must be an instruction boundary.
+   - **Checks:** the 3.4 and 4.4 interrupt tests are replayed in full in lockstep, handler included.
+   - **Done:**
+     - **Model:** `Machine.take_trap`, `interrupt` and `mret`, with `mepc`, `mcause`, `mtval` and `mstatus` as VexRiscv sets them; `Machine(traps=True)` takes synchronous traps instead of stopping (`lockstep.simulate(..., traps=True)`). Instruction fetch faults are now `instruction_access_fault`.
+     - **RTL lockstep:** where the trace reaches `mtvec` instead of the next op, the model tries that op on a snapshot. If it traps, the model takes the same trap; otherwise it rolls back and takes the interrupt, which must be at op 0 with `MIE` set.
+     - **What it found:** `mstatus.MPP` on VexRiscv is cleared by `mret`, not hard-wired to 3 as the model had it since 3.3, and only MIE, MPIE and MPP exist. The first replay of an interrupt run diverged at an `MRS PRIMASK` after the first `mret`.
+     - **Interrupt runs:** the 3.4 and 4.4 tests now replay their `+irq` runs in full, handler included, all three seeds each (about 2,000 interrupts per run).
+     - **Synchronous traps:** `test_synchronous_traps` (`tests/c/trap_lib.S`, `trap_main.c`) traps from Thumb code (`SVC`, `BKPT`, `UDF`, `MRS MSP`, misaligned and faulting loads, a misaligned store, one load at op 1 of its expansion) and from RISC-V (`ecall`, `ebreak`). It resumes after each, in lockstep, and against the model running alone with traps. The handler's records (cause, `mepc`, `mtval`, the `SVC`/`BKPT` number) are checked against the architecture.
+     - **Negative control:** a wrong `ecall` cause in the model diverges at the handler's `csrr mcause`.
+2. **The controller and SysTick in the RTL**, in the SoC, driving the core's external interrupt. (done)
+   - **The testbench's `+irq`** drives interrupt lines of the controller instead of the core's timer input.
+   - **Unit check:** `tests/test_nvic_rtl.py` against `model/thumbv/nvic.py`.
+   - **Resources and Fmax** are logged, and the architecture diagram updated.
+   - **Done:**
+     - **The model** (`model/thumbv/nvic.py`) defines every register and the cycle model; `tests/test_nvic.py` checks it against the ARMv6-M rules: priorities and ties, preemption, level lines that pend again, SysTick's period and `COUNTFLAG`, PendSV.
+     - **The RTL** (`rtl/soc/thumbv_nvic.v`): one priority encoder per level over the 34 sources.
+       - **Check:** `tests/test_nvic_rtl.py` runs random sequences through it alone (`sim/nvic_tb.sv`) and the model, comparing every read and the interrupt line after every cycle. 16 seeds of 20,000 cycles, each with hundreds of claims and dozens of preemptions.
+       - **What it found:** one RTL bug (the `ICSR` fields packed 3 bits low) and one model bug: an interrupt active twice, preempting its own handler after its priority was raised and it was pended again, was counted into the wrong bit of the active mask. The directed tests had already caught a precedence bug in the model's pending-and-enabled check.
+     - **In the SoC:** at `0xE000_E000` and `0x1000_1000`, driving the core's external interrupt; the core's timer input is tied off. The testbench's `+irq` now drives interrupt line 0, so the 3.4 and 4.4 interrupt tests go through the controller (claim, acknowledge, complete), in full lockstep.
+     - **From software:** `test_interrupt_controller` (`tests/c/nvic_main.c`) pends an interrupt and PendSV and runs SysTick, and checks they're claimed in priority order, with `VECTACTIVE` showing each.
+     - **Cost:** 907 LEs and 256 registers (6,922 LEs in all, 28%). Fmax 31.7 MHz, with the core's critical path unchanged. The board still runs the loops program.
+3. **The entry routine and trap handler** (`firmware/`), with a small C API (vector table, enable, priority, pend). (done)
+   - **Tests on the RTL, in lockstep:**
+     - a SysTick handler compiled for Cortex-M0 (Thumb) interrupting RISC-V code, and a RISC-V handler interrupting Thumb code, NZCV preserved;
+     - preemption by priority, with pended software interrupts;
+     - PendSV;
+     - `SVC` from Thumb and `ecall` from RISC-V, with their numbers;
+     - a `BKPT` and a fault reported.
+   - **Latency** (interrupt line to the handler's first instruction) is measured against the Cortex-M0's 16 cycles.
+   - **On the board:** a SysTick-driven Thumb handler blinks the LEDs and counts over the UART.
+   - **Done** ([firmware.md](firmware.md)):
+     - **The firmware:** `firmware/thumbv_entry.S` (the entry routine) and `thumbv.c`/`thumbv.h` (dispatch, SVC, fault reports, the API), with `thumbv_scs.h` for the registers. Builds link it with `firmware=True`.
+     - **`test_firmware_interrupts`,** in lockstep:
+       - SysTick handlers: Thumb interrupting RISC-V, RISC-V interrupting Thumb, and a flag-changing Thumb handler interrupting Thumb, 130–290 interrupts each, with results unchanged;
+       - preemption (interrupt 1 enters, 2 preempts it, 1 leaves, then 3 at 1's priority, then PendSV);
+       - `SVC #1`/`#2` from Thumb and `ecall` from RISC-V, with arguments and results.
+     - **Negative control:** without the NZCV restore, the Thumb-on-Thumb result is wrong.
+     - **Faults:** `test_firmware_faults` checks the default reports for `BKPT`, `ebreak` and a Thumb load fault.
+     - **Latency:** 80 cycles from SysTick pending to the C handler's first load, against the Cortex-M0's 16 to its first instruction.
+     - **On the board:** `make board PROGRAM=tick`, a Thumb SysTick handler at 10 Hz counting on the LEDs, with RISC-V printing each tick. Simulated too, for its first two ticks.
+     - **A layout fix it needed:** on the board's 16 KiB data RAM, the Thumb library's data and the RISC-V side's started on the same byte, so only one side could have data. With the firmware every mixed program has RISC-V data, so the RISC-V side now starts at `0x2000_2000`, and the Thumb library has 8 KiB.
+4. **A prebuilt Cortex-M0 library from RISC-V.** (done)
+   - **The library:** built separately as a Cortex-M0 static library and used only as a binary with its header, through the Phase 0 thunk generator and build flow ([interworking.md](interworking.md)). Candidate: CMSIS-DSP (Apache-2.0), chosen at the start of the step.
+   - **Checked:** its results against the same functions compiled for RISC-V, in lockstep on the RTL and on the board.
+   - **Done** ([interworking.md](interworking.md#a-prebuilt-library-cmsis-dsp)):
+     - **The library:** CMSIS-DSP v1.18.0 (with CMSIS_6 v6.4.0 for CMSIS-Core), built for Cortex-M0 as a static library and linked as a binary. `mixed_program` gained `thumb_libs`, with exports kept and unused sections dropped.
+     - **The interface:** 16 functions; the generator makes thunks for the three with five arguments. The parser gained scalar typedefs.
+     - **What it found:** `arm-none-eabi` uses 1-byte enums, while RISC-V's are 4 bytes. That's harmless for arguments and results but not in structs, so interfaces declare enums by their Thumb size, and the interworking doc's "same type sizes" now has that exception. The test checks the negative `arm_status` values cross correctly sign-extended.
+     - **The test:** `test_cmsis_dsp`, in lockstep on the RTL, prints exactly what the all-RISC-V build prints, with a few values checked against their definitions. On the board, `make board PROGRAM=dsp` prints the same.
+     - **New host dependency:** picolibc for the RISC-V side, which had no C library (CI installs it too).
+5. **An RTOS with a Thumb task.** (done)
+   - **The RTOS:** FreeRTOS (MIT), RISC-V port, ticked by SysTick through the controller.
+   - **The context switch** also saves NZCV, so a Thumb task can be preempted between a compare and its branch.
+   - **The tasks:** one Thumb task (compiled for Cortex-M0) and RISC-V tasks, exchanging data through a queue.
+   - **Checked:** on the RTL, then on the board.
+   - **Done** ([firmware.md](firmware.md#freertos)):
+     - **The kernel:** FreeRTOS V11.3.3 (`third_party/FreeRTOS-Kernel`), unmodified, with its own RISC-V port. Thumb-V's glue is in `firmware/freertos/`:
+       - SysTick as the tick, through the controller;
+       - the port's application interrupt handler claims, ticks or dispatches, and completes;
+       - NZCV in each task's context, through the port's chip-extension hook (one word; the frame is 128 bytes).
+     - **The program:** two instances of one Cortex-M0 task beside three RISC-V tasks, through two queues. The Thumb task calls `xQueueReceive`/`xQueueGenericSend` by name through the import table.
+     - **On the RTL** (`test_freertos`): in lockstep with the model and with the board's RAMs. 252 traps, 82 of them in Thumb code, both Thumb tasks doing jobs, every result checked in RISC-V.
+     - **Negative control:** without NZCV in the context, 5 of 16 results are wrong.
+     - **On the board:** `make board PROGRAM=rtos` runs at a 1 kHz tick with no errors.
+     - **Size:** 13.8 KB of RISC-V code with unused kernel functions dropped (`--gc-sections`), under the board's 16 KiB.
+     - **A limit:** the port takes every `ecall` as a yield and resumes 4 bytes on, so Thumb tasks yield through the API, not with `SVC`.
+
+**Exit criteria:**
+- The controller matches its model.
+- Thumb and RISC-V handlers interrupt each other's code on the RTL in lockstep and on the board.
+- The prebuilt library gives the same results as its RISC-V build.
+- The RTOS runs a Thumb task beside RISC-V tasks on the board.
+- Latency, resources and Fmax are logged.
+
 ## Later phases (outline)
 
 Each will get its own detailed section when it starts.
-- **Phase 5: interrupts and mixed execution in practice.**
-  - The unified controller (NVIC programming model) and the shared timer (SysTick / `mtime` views) in RTL, verified in simulation against a model of the controller.
-  - The shared RISC-V entry routine and synchronous trap handler (`SVC`/`ecall` from either instruction set). Milestone: a timer interrupt handled by a Thumb ISR from a Cortex-M-compiled object, interrupting RISC-V code, and the reverse.
-  - The thunk generator and build flow from Phase 0 applied to a real ARM-only library (e.g. a prebuilt Cortex-M0 DSP or crypto library) called from RISC-V.
-  - An RTOS (FreeRTOS or Zephyr) with a Thumb task alongside native tasks, including NZCV in the context switch.
 - **Phase 6: ARM-only mode.** Cortex-M exception emulation on top of the Phase 5 controller and entry path: the stacked frame, EXC_RETURN, MSP/PSP banking, PendSV, ARM fault escalation, an SCB subset and a GPIO shim on the LEDs. Milestone: an unmodified Cortex-M0 blinky ELF runs on the board.
 - **Phase 7: performance and scale.** SDRAM controller, CoreMark on the board, Zbb for `REV`/`UXT*`/`ROR`, and comparison against the Phase 0 model's predicted ratio. If needed, the options left open by D1: the ARM-shift micro-op and fused `CMP` + `B<cond>`.
 
@@ -502,7 +607,6 @@ fpga/cyc1000/  Quartus project, pin constraints
 
 Done: 0.1 (repo and toolchains), 0.2 (ISA coverage), 0.3 (expander), 0.4 (executor and lockstep), 0.5 (test corpus), 0.6 (interworking), 0.7 (measurements).
 
-Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board). Phase 3 is done: 3.1–3.3 (the sequencer and every multi-op expansion), 3.4 (interrupts at Thumb boundaries), 3.5 (calls in both directions, in simulation and on the board). Phase 4: 4.1 (strategy C in the model), 4.2 (the flags unit and flag writers in the RTL), 4.3 (the flag readers: the RTL is now all of strategy C), 4.4 (gcc code with loops, CoreMark and Embench on the RTL; loops on the board).
+Phase 0 is closed. Phase 1 is done: 1.1 (core generated), 1.2 (simulation SoC and RTL lockstep), 1.3 (code-reading spike, [vexriscv-notes.md](vexriscv-notes.md)), 1.4 (board bring-up, [board.md](board.md)). Phase 2 is done: 2.1 (mode switch in fetch), 2.2 (single-op expander), 2.3 (exhaustive check), 2.4 (RISC-V calls gcc-compiled Thumb code, in simulation and on the board). Phase 3 is done: 3.1–3.3 (the sequencer and every multi-op expansion), 3.4 (interrupts at Thumb boundaries), 3.5 (calls in both directions, in simulation and on the board). Phase 4: 4.1 (strategy C in the model), 4.2 (the flags unit and flag writers in the RTL), 4.3 (the flag readers: the RTL is now all of strategy C), 4.4 (gcc code with loops, CoreMark and Embench on the RTL; loops on the board). Phase 5: 5.1 (the model takes traps; the RTL lockstep follows the core into them), 5.2 (the interrupt controller and SysTick in the RTL), 5.3 (the firmware's entry routine: handlers of both instruction sets, SVC, faults; a Thumb SysTick handler on the board), 5.4 (CMSIS-DSP's Cortex-M0 build called from RISC-V, in simulation and on the board), 5.5 (FreeRTOS with Thumb tasks beside RISC-V tasks, in simulation and on the board). Phase 5 is done.
 
-1. Close Phase 4: merge `phase-4` to `main`.
-2. Phase 5: write its detailed section (the interrupt controller and shared entry routine, D9), then start.
+1. Plan Phase 6: ARM-only mode.

@@ -4,8 +4,14 @@ Input is an interface header: plain C, restricted to struct definitions and
 function prototypes tagged with the side that implements them:
 
     struct pair { int a, b; };
+    typedef int16_t q15_t;                              /* scalar typedefs */
     THUMBV_THUMB struct pair make_pair(int a, int b);   /* Thumb code, called from RISC-V */
     THUMBV_RISCV int rv_sum(const int *p, int n);       /* RISC-V code, called from Thumb */
+
+Pointers may point to anything, declared or not (`const arm_fir_instance_q15 *`).
+Enums aren't scalars here: arm-none-eabi uses short enums (Tag_ABI_enum_size
+small), so an interface declares an enum by its Thumb size, e.g.
+`typedef int8_t arm_status;`.
 
 Both tags expand to nothing in C (see tests/c/thumbv_interface.h), so the
 same header serves both compilers. For each function this module computes the
@@ -103,8 +109,9 @@ def _split_top(text, sep=","):
     return parts + [cur] if cur.strip() else parts
 
 
-def _type(decl, structs, named):
+def _type(decl, structs, named, typedefs=None):
     """The type of a declaration; `named` if it ends in a name to drop."""
+    typedefs = typedefs or {}
     if "(" in decl or "[" in decl:  # function pointer or array parameter
         return POINTER
     pointer = "*" in decl
@@ -119,6 +126,8 @@ def _type(decl, structs, named):
         return POINTER if pointer else None
     if pointer:
         return POINTER
+    if len(words) == 1 and words[0] in typedefs:
+        return typedefs[words[0]]
     size = _SCALARS.get(tuple(words))
     if size is None:
         raise InterfaceError(f"unsupported type in '{decl.strip()}'")
@@ -156,6 +165,13 @@ def parse(text: str) -> Interface:
     for m in re.finditer(r"struct\s+(\w+)\s*\{([^{}]*)\}\s*;", text):
         iface.structs[m.group(1)] = _struct(m.group(1), m.group(2), iface.structs)
     text = re.sub(r"struct\s+\w+\s*\{[^{}]*\}\s*;", " ", text)
+    typedefs = {}
+    for m in re.finditer(r"\btypedef\s+([^;{}]+?)\s+(\w+)\s*;", text):
+        t = _type(m.group(1), iface.structs, named=False, typedefs=typedefs)
+        if t is None or t is POINTER and "*" not in m.group(1):
+            raise InterfaceError(f"unsupported typedef: {m.group(0).strip()}")
+        typedefs[m.group(2)] = t
+    text = re.sub(r"\btypedef\s+[^;{}]+;", " ", text)
     for decl in text.split(";"):
         m = re.fullmatch(r"\s*(THUMBV_THUMB|THUMBV_RISCV)\s+(.+?)\b(\w+)\s*\((.*)\)\s*", decl, re.S)
         if not m:
@@ -166,11 +182,12 @@ def parse(text: str) -> Interface:
         if "..." in params:
             raise InterfaceError(f"{name}: variadic functions are not supported")
         param_types = [] if params.strip() in ("", "void") else [
-            _type(p, iface.structs, named=True) for p in _split_top(params)]
+            _type(p, iface.structs, named=True, typedefs=typedefs) for p in _split_top(params)]
         if None in param_types:
             raise InterfaceError(f"{name}: void parameter")
         side = "thumb" if tag == "THUMBV_THUMB" else "riscv"
-        iface.functions.append(Function(name, side, _type(ret, iface.structs, named=False), param_types))
+        iface.functions.append(Function(name, side, _type(ret, iface.structs, named=False, typedefs=typedefs),
+                                        param_types))
     return iface
 
 

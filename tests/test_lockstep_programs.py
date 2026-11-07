@@ -26,8 +26,8 @@ def test_mixed_program(build_mixed, flags):
 @pytest.mark.parametrize("flags", ["A", "C"])
 def test_loops_program(build_mixed, flags):
     """Phase 4.4's gcc loops (loops.c), as run on the RTL and the board, against
-    the reference (the variant without printing: the model has no UART)."""
-    rv_elf, thumb_elf = build_mixed(["loops.c"], ["irq_loops_main.c", "loops_run.c", "irq_handler.S"])
+    the reference (the variant without printing or interrupts: no SoC here)."""
+    rv_elf, thumb_elf = build_mixed(["loops.c"], ["loops_check_main.c", "loops_run.c"])
     rv_img, thumb_img = elf.load(rv_elf), elf.load(thumb_elf)
     result = lockstep.run([rv_img, thumb_img], stop=rv_img.symbols["done"], flags=flags)
     assert result.ok, f"{result.stopped}\n{result.divergence}"

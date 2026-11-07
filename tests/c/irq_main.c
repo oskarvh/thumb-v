@@ -17,7 +17,8 @@ volatile unsigned irq_count;
 int main(void)
 {
     CSR("csrw", "mtvec", (unsigned)irq_handler);
-    CSR("csrs", "mie", 1u << 7);          /* MTIE */
+    *(volatile unsigned *)0xE000E100 = 1; /* NVIC_ISER: interrupt 0, the testbench's */
+    CSR("csrs", "mie", 1u << 11);         /* MEIE: the controller's line */
     CSR("csrs", "mstatus", 1u << 3);      /* MIE */
     unsigned sum = 0;
     for (int i = 0; i < 6; i++)

@@ -18,12 +18,24 @@ class Trap(Exception):
         self.cause, self.pc, self.tval = cause, pc, tval
 
 
+# mcause of each synchronous trap (RISC-V privileged spec; VexRiscv's CsrPlugin).
+CAUSES = {
+    "instruction_misaligned": 0, "instruction_access_fault": 1, "illegal_instruction": 2,
+    "breakpoint": 3, "load_misaligned": 4, "load_access_fault": 5, "store_misaligned": 6,
+    "store_access_fault": 7, "ecall": 11,
+}
+INTERRUPT = 1 << 31        # mcause bit 31: an interrupt
+MSTATUS_MPIE = 1 << 7
+MTVEC, MEPC, MCAUSE, MTVAL = 0x305, 0x341, 0x342, 0x343
+
+
 class Memory:
     """Sparse, page-granular memory. Accesses outside mapped pages fault."""
 
     def __init__(self):
         self._pages: dict[int, bytearray] = {}
         self.log: list[tuple[int, int, int]] | None = None  # (addr, size, value) per store, if set
+        self.undo: list[tuple[int, bytes]] | None = None    # (addr, old bytes) per store, if set
 
     def map(self, base: int, size: int):
         if base % PAGE or size % PAGE:
@@ -54,6 +66,8 @@ class Memory:
 
     def write(self, addr: int, n: int, value: int):
         value &= (1 << (8 * n)) - 1
+        if self.undo is not None:
+            self.undo.append((addr, self.read_bytes(addr, n)))
         self.write_bytes(addr, value.to_bytes(n, "little"))
         if self.log is not None:
             self.log.append((addr, n, value))
@@ -71,7 +85,11 @@ def _sext(value, bits):
 
 
 class Machine:
-    def __init__(self, thumb_regions=(), options: expander.Options = expander.Options()):
+    """`traps`: take synchronous traps (to mtvec, as the core does) instead of
+    stopping with Trap. Interrupts are taken only when asked (interrupt())."""
+
+    def __init__(self, thumb_regions=(), options: expander.Options = expander.Options(),
+                 traps: bool = False):
         self.x = [0] * 32
         self.pc = 0
         self.mstatus = r.MSTATUS_MPP
@@ -82,6 +100,7 @@ class Machine:
         self.region_csrs = [0] * (2 * r.THUMB_REGIONS)   # the hardware's region CSRs, see rv32.py
         self.trap_csrs = dict(r.TRAP_CSRS)                 # stored only, see rv32.py
         self.options = options
+        self.traps = traps
         self.retired_thumb = 0   # Thumb instructions completed
         self.retired_ops = 0     # RV32 ops executed, native or expanded
         self._expansions = {}    # (pc, hw1, hw2) -> Expansion; expand() is a pure function
@@ -93,11 +112,65 @@ class Machine:
         return any(c[2 * i] <= addr < c[2 * i + 1] for i in range(r.THUMB_REGIONS))
 
     def step(self):
-        """Execute one instruction: one Thumb instruction (all its ops) or one RV32 op."""
+        """Execute one instruction: one Thumb instruction (all its ops) or one RV32 op.
+        With `traps`, a trap goes to mtvec; otherwise it raises Trap."""
+        try:
+            self._step()
+        except Trap as trap:
+            if not self.traps:
+                raise
+            self.take_trap(trap)
+
+    # --- Traps (RISC-V machine mode, as VexRiscv's CsrPlugin) ---------------------
+
+    @property
+    def trap_vector(self) -> int:
+        return self.trap_csrs[MTVEC] & ~3      # direct mode only
+
+    def take_trap(self, trap: Trap):
+        """Enter the trap handler for a synchronous trap. The ops of a Thumb
+        instruction before the trapping one have run: expansions restart."""
+        self._enter(trap.pc, CAUSES[trap.cause])
+        self.trap_csrs[MTVAL] = trap.tval & MASK
+
+    def interrupt(self, code: int):
+        """Take interrupt `code` (7: machine timer, 11: machine external) before
+        the instruction at pc, which must be an instruction boundary."""
+        self._enter(self.pc, INTERRUPT | code)
+
+    def _enter(self, epc, cause):
+        self.trap_csrs[MEPC] = epc & MASK
+        self.trap_csrs[MCAUSE] = cause
+        mie = self.mstatus & r.MSTATUS_MIE
+        # MPIE = MIE, MIE = 0, MPP = machine mode.
+        self.mstatus = (self.mstatus & ~(r.MSTATUS_MIE | MSTATUS_MPIE) | (MSTATUS_MPIE if mie else 0)
+                        | r.MSTATUS_MPP)
+        self.pc = self.trap_vector
+
+    def snapshot(self):
+        """The architectural state, and stores journaled from now on, for restore()."""
+        self.mem.undo = []
+        return (list(self.x), self.pc, self.mstatus, self.nzcv, dict(self.trap_csrs),
+                list(self.region_csrs), self._result, self.retired_ops, self.retired_thumb)
+
+    def restore(self, state):
+        (self.x, self.pc, self.mstatus, self.nzcv, self.trap_csrs, self.region_csrs,
+         self._result, self.retired_ops, self.retired_thumb) = state
+        for addr, old in reversed(self.mem.undo):
+            self.mem.write_bytes(addr, old)
+        self.mem.undo = None
+
+    def _fetch(self, pc, n):
+        try:
+            return self.mem.read(pc, n)
+        except Trap:
+            raise Trap("instruction_access_fault", pc, pc & ~3) from None
+
+    def _step(self):
         pc = self.pc
         if self.in_thumb(pc):
-            hw1 = self.mem.read(pc, 2)
-            hw2 = self.mem.read(pc + 2, 2) if expander.isa.is_32bit(hw1) else 0
+            hw1 = self._fetch(pc, 2)
+            hw2 = self._fetch(pc + 2, 2) if expander.isa.is_32bit(hw1) else 0
             key = (pc, hw1, hw2)
             exp = self._expansions.get(key)
             if exp is None:
@@ -112,7 +185,7 @@ class Machine:
                 self.pc = (pc + exp.length) & MASK
             self.retired_thumb += 1
         else:
-            target = self.execute(self.mem.read(pc, 4), pc, link=pc + 4)
+            target = self.execute(self._fetch(pc, 4), pc, link=pc + 4)
             self.pc = target if target is not None else (pc + 4) & MASK
 
     # --- Execution ------------------------------------------------------------------
@@ -300,10 +373,18 @@ class Machine:
         raise Trap("illegal_instruction", pc, w)
 
     def _system(self, w, f3, rd, rs1, pc):
+        # mtval is the instruction word for ecall and ebreak, as on VexRiscv.
         if w == r.ecall():
-            raise Trap("ecall", pc)
+            raise Trap("ecall", pc, w)
         if w == r.ebreak():
-            raise Trap("breakpoint", pc)
+            raise Trap("breakpoint", pc, w)
+        if w == r.mret():
+            # MIE = MPIE, MPIE = 1, and MPP = 0: VexRiscv clears it, although
+            # machine mode is the only mode (CsrPlugin, MRET).
+            mpie = self.mstatus & MSTATUS_MPIE
+            self.mstatus = (self.mstatus & ~(r.MSTATUS_MIE | r.MSTATUS_MPP) | (r.MSTATUS_MIE if mpie else 0)
+                            | MSTATUS_MPIE)
+            return self.trap_csrs[MEPC] & ~1
         if w == r.wfi():
             return None
         csr = w >> 20
@@ -328,7 +409,10 @@ class Machine:
             # Writes are skipped when rs1/uimm is 0 for the set/clear forms.
             if f3 & 3 == 1 or rs1:
                 if csr == r.MSTATUS:
-                    self.mstatus = (new & MASK) | r.MSTATUS_MPP
+                    # Only MIE, MPIE and MPP exist; MPP is set by writing 3 to
+                    # it, and otherwise kept (VexRiscv, machine mode only).
+                    mpp = r.MSTATUS_MPP if new & r.MSTATUS_MPP == r.MSTATUS_MPP else self.mstatus & r.MSTATUS_MPP
+                    self.mstatus = new & (r.MSTATUS_MIE | MSTATUS_MPIE) | mpp
                 elif csr == r.NZCV:
                     self.nzcv = (new & MASK) >> 28
                 elif csr in self.trap_csrs:
