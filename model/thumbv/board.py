@@ -116,7 +116,10 @@ class Uart:
         out, end = b"", time.monotonic() + seconds
         while (left := end - time.monotonic()) > 0:
             if select.select([self.fd], [], [], left)[0]:
-                out += os.read(self.fd, 4096)
+                try:
+                    out += os.read(self.fd, 4096)
+                except BlockingIOError:   # readable, then nothing: another reader on the port took it
+                    pass
         return out
 
     def close(self):
