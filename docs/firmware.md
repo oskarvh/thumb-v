@@ -90,6 +90,7 @@ Programs build with `build.freertos_sources()` and `build.freertos_flags()`. `bu
   - They don't use the kernel's headers, which belong to the RISC-V port.
   - They must not execute `SVC`: the port treats every `ecall` as a yield and resumes 4 bytes on. They yield through the API instead, which `ecall`s from RISC-V code.
 - **Faults,** failed assertions, stack overflows and a full heap are reported over the UART, and the program stops.
+- **The idle hook** counts (`thumbv_idle_count`), and it's weak, so programs can replace it. Without it, the idle task's empty loop compiles to `j .`, which the simulation testbench takes as the end of the program.
 
 **The demo** (`tests/c/rtos_main.c`, `rtos_thumb.c`, `rtos_work.h`):
 - a RISC-V producer puts 8 jobs a round on a queue;

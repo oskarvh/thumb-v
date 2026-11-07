@@ -105,8 +105,8 @@ See [`docs/plan.md`](docs/plan.md) for details and exit criteria.
 2. Thumb region CSRs and a combinational expander for 1:1 instructions plus `B`/`BX`/`BL`; a RISC-V program calls a Thumb function. **Done.**
 3. Sequencer for multi-instruction expansions; PC-hold and interrupt-boundary patches. **Done.**
 4. Hardware flags unit (NZCV); gcc-compiled Thumb code with loops, CoreMark and Embench run on the RTL. **Done.**
-5. Unified interrupt controller and shared entry routine; real ARM libraries and an RTOS with Thumb tasks.
-6. ARM-only mode: Cortex-M exception emulation and a GPIO shim; run an unmodified Cortex-M0 blinky.
+5. Unified interrupt controller and shared entry routine; real ARM libraries and an RTOS with Thumb tasks. **Done.**
+6. A demo on the board: FreeRTOS, with the button switching one blinky between its RISC-V and Cortex-M0 builds. **Done.** (ARM-only mode, Cortex-M exception emulation for unmodified Cortex-M0 images, is not planned for now.)
 7. Performance: SDRAM, CoreMark on the board, Zbb.
 
 ## Verification

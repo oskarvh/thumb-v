@@ -32,7 +32,7 @@
 #define configTOTAL_HEAP_SIZE               6144
 #endif
 
-#define configUSE_IDLE_HOOK                 0
+#define configUSE_IDLE_HOOK                 1   /* thumbv_freertos.c */
 #define configUSE_TICK_HOOK                 0
 #define configUSE_MALLOC_FAILED_HOOK        1
 #define configCHECK_FOR_STACK_OVERFLOW      2

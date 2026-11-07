@@ -123,6 +123,12 @@ def build_rtos(tmp_path):
 
 
 @pytest.fixture
+def build_demo(tmp_path):
+    """The board demo: build_demo(defines=()) -> (rv_elf, thumb_elf), see build.demo_program."""
+    return _tools(lambda defines=(): build.demo_program(tmp_path, defines))
+
+
+@pytest.fixture
 def build_bench(tmp_path):
     """Build benchmarks: build_bench.coremark(), .embench(name) or .float_kernels()."""
 

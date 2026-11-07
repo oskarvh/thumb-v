@@ -9,6 +9,7 @@
 //   +cycles=<n>     give up after n cycles (default 10,000,000)
 //   +wave=<file>    dump every signal to an FST waveform (GTKWave, Surfer)
 //   +irq=<seed>     raise interrupt line 0 again and again, see below
+//   +button=<n>     press the SoC's button every n cycles, for n/4 cycles
 //
 // The UART line is decoded here and printed to stdout. The run ends when the
 // core retires `j .` (0x0000006f) or Thumb's `b .` (0xe7fe, a halfword no
@@ -42,10 +43,11 @@ module tb #(
     always #5 clk = ~clk;
 
     logic irq = 0;
+    logic button = 0;
 
     thumbv_soc #(.CODE_WORDS(CODE_WORDS), .DATA_WORDS(DATA_WORDS),
                  .UART_CLKS_PER_BIT(CLKS_PER_BIT)) dut (
-        .clk(clk), .reset(reset), .irq({31'b0, irq}), .uart_tx(uart_tx), .leds(leds));
+        .clk(clk), .reset(reset), .irq({31'b0, irq}), .button(button), .uart_tx(uart_tx), .leds(leds));
 
     string code_file, data_file, trace_file, wave_file;
     longint max_cycles = 10_000_000;
@@ -119,6 +121,20 @@ module tb #(
             end
         end else
             irq <= 0;
+    end
+
+    // --- The button (+button): pressed for the last quarter of every period ---------
+
+    longint button_period = 0;
+    longint button_cycle = 0;
+
+    initial void'($value$plusargs("button=%d", button_period));
+
+    always @(posedge clk) begin
+        if (button_period != 0 && !reset) begin
+            button_cycle <= button_cycle + 1 == button_period ? 0 : button_cycle + 1;
+            button <= button_cycle >= button_period - button_period / 4;
+        end
     end
 
     // Let the UART finish the last byte, and the receiver below print it.

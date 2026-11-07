@@ -603,6 +603,38 @@ def test_freertos_needs_nzcv_in_the_context(rtl_simulator, build_rtos, tmp_path)
     assert result.a0 > 0, result.uart
 
 
+def test_board_demo(rtl_simulator, build_demo, tmp_path):
+    """The board demo: FreeRTOS, with the button switching between the RISC-V
+    and Cortex-M0 builds of one blinky. The testbench presses the button every
+    60,000 cycles; with a tick every 3,000 and a step a tick, each build makes
+    steps between presses, and the LEDs show whose: LED 7 is the Thumb
+    build's. In lockstep with the model, with the board's RAMs."""
+    images = [elf.load(p) for p in build_demo(["-DDEMO_STEP=1", "-DDEMO_SETTLE=2", "-DDEMO_SWITCHES=4",
+                                               "-DconfigTICK_RATE_HZ=4000"])]
+    out = tmp_path / "run"
+    out.mkdir()
+    result = run(images, out, memories=rtlsim.BOARD, button=60_000)
+    lines = result.uart.splitlines()
+    switched = [re.fullmatch(r"button: switched to the (.+) blinky; steps so far: RISC-V (\w+), Thumb (\w+)", l)
+                for l in lines[2:]]
+    assert len(switched) == 4 and all(switched), result.uart
+    assert [m[1] for m in switched] == ["Thumb (Cortex-M0)", "RISC-V"] * 2
+    steps = [(int(m[2], 16), int(m[3], 16)) for m in switched]
+    for (rv0, t0), (rv1, t1) in zip(steps, steps[1:]):
+        assert rv1 > rv0 or t1 > t0                      # the one that ran made steps
+    assert steps[-1][0] > 0 and steps[-1][1] > 0
+    assert rtlsim.lockstep(images, result) is None
+
+    # LED writes: the Thumb build's from the Thumb region, with LED 7 on; one
+    # scanner, shared, so each build carries on where the other stopped.
+    leds = [(thumb_region(images, r.pc), r.wdata & 0xFF) for r in result.trace
+            if r.wmask and r.mem_addr == 0x1000_0008]
+    assert {mark for thumb, v in leds for mark in [v & 0x80] if thumb} == {0x80}
+    assert {v & 0x80 for thumb, v in leds if not thumb} == {0}
+    positions = [(v & 0x7F).bit_length() - 1 for _, v in leds]
+    assert all(abs(a - b) == 1 for a, b in zip(positions, positions[1:]))
+
+
 def thumb_region(images, addr):
     return any(lo <= addr < hi for img in images if img.is_thumb for lo, hi in img.code_ranges())
 
