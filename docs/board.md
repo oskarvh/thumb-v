@@ -10,9 +10,12 @@ make board PROGRAM=loops        # gcc-compiled Thumb loops and conditions (Phase
 make board PROGRAM=tick         # a Thumb SysTick handler at 10 Hz, through the firmware (Phase 5.3)
 make board PROGRAM=dsp          # RISC-V calls CMSIS-DSP's Cortex-M0 build (Phase 5.4)
 make board PROGRAM=rtos         # FreeRTOS: two Thumb tasks beside RISC-V tasks (Phase 5.5)
+make board PROGRAM=demo         # the button switches a blinky between its RISC-V and Thumb builds (Phase 6)
 make board PROGRAM=blinky       # counts on the LEDs, forever
 make board ELF="a.elf b.elf"    # any program built with tests/link/rv32.ld (and thumb_lib.ld)
 ```
+
+For a guided tour of the demo (`PROGRAM=demo`), see [demo.md](demo.md).
 
 `make board` runs `python -m thumbv.board`, which:
 1. writes the program into the RAMs' initial contents (`build/board/code.mem` and `data.mem`);
@@ -39,7 +42,9 @@ The FPGA's configuration is SRAM, so the board forgets the program at power-off.
 - **Thumb-only programs** (`0x1_0000`, `tests/link/thumb.ld`) would collide with nothing, but they need RISC-V startup code to reach them: the reset vector is RISC-V code at `0x2_0000`.
 - **The same configuration in simulation:** `python -m thumbv.rtlsim --board` runs the board's RAM sizes in Verilator, and `tests/test_rtl.py` checks hello world with them.
 
-**Reset.** The SoC is held in reset for 1.4 s after configuration, and while the user button is held. The delay is for the host: loading the FPGA resets the FT2232H, its serial port disappears and comes back (often as a different `/dev/ttyUSB*`), and the program's first output would otherwise be lost. The button switches to ground with no pull-up on the board, so the pin's weak pull-up is on.
+**Reset.** The SoC is held in reset for 1.4 s after configuration. Until Phase 6 the user button reset it too; now it's an input for software. The delay is for the host: loading the FPGA resets the FT2232H, its serial port disappears and comes back (often as a different `/dev/ttyUSB*`), and the program's first output would otherwise be lost. 
+
+**The button** switches to ground with no pull-up on the board, so the pin's weak pull-up is on. The top level synchronises it and debounces it (a new level must hold for 2^16 cycles, 5.5 ms) for the SoC's button register at `0x1000_0010` and interrupt line 1 ([soc.md](soc.md)).
 
 **Pins.**
 
@@ -68,4 +73,7 @@ The FPGA's configuration is SRAM, so the board forgets the program at power-off.
 - `tests/c/thumb_leaf_main.c` calls the gcc-compiled leaf Thumb functions in `tests/c/thumb_leaf.c` and prints their results (`PROGRAM=leaf`). The LEDs show the low byte of the results' sum, `0x9d`.
 - `tests/c/loops_main.c` and `tests/c/loops_run.c` call the gcc-compiled Thumb functions in `tests/c/loops.c`, all loops and conditions: CRC-32, a sort, a binary search, GCD, a population count, 64-bit Fibonacci and dot product, a chain of comparisons, `strcmp`, an integer square root (`PROGRAM=loops`). It prints each result and a checksum, `9f3e3f8e`, the same as in simulation.
 - `tests/c/tick_main.c` starts SysTick at 10 Hz with a Thumb handler, compiled for Cortex-M0, from `tests/c/tick_thumb.c`, through the firmware's entry routine ([firmware.md](firmware.md)). The handler counts on the LEDs, and RISC-V prints `tick 00000001`, `tick 00000002`, ... (`PROGRAM=tick`).
+- `tests/c/demo_main.c`, the demo (`PROGRAM=demo`): FreeRTOS with three tasks. Two blinkies run one C source, `demo_blinky.c`, built by arm-none-eabi-gcc for Cortex-M0 and by riscv64-unknown-elf-gcc. A RISC-V orchestrator, woken by the button's interrupt, suspends one blinky and resumes the other at each press, and says which over the UART.
+  - The blinky is a scanner on LEDs 0–6, with LED 7 on while the Thumb build runs.
+  - The position is shared, so each build carries on where the other stopped. Each step runs with the scheduler suspended, so a switch can't land half-way through one.
 - `tests/c/callback_main.c` and `tests/c/callback.c` call each other through the interface header `tests/c/callback.h` (`PROGRAM=callback`): Thumb code calls two RISC-V functions, reads a table through a literal pool and hands RISC-V a string to print.

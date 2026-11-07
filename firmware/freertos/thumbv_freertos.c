@@ -106,6 +106,17 @@ void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
     stop();
 }
 
+/* The idle task's loop, with nothing to do, compiles to `j .`, which the
+ * simulation testbench takes for the end of the program (sim/tb.sv); a call
+ * each time round keeps it a loop. It counts, too. Weak: programs can
+ * replace it. */
+volatile uint32_t thumbv_idle_count;
+
+__attribute__((weak)) void vApplicationIdleHook(void)
+{
+    thumbv_idle_count++;
+}
+
 void vApplicationMallocFailedHook(void)
 {
     put("FreeRTOS: out of heap\n");

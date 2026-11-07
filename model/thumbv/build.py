@@ -244,12 +244,25 @@ def freertos_flags() -> list[str]:
             "-Wl,--defsym=__freertos_irq_stack_top=__stack_top"]
 
 
+def freertos_program(thumb_names, rv_names, interface: str, out_dir: Path, defines=()) -> tuple[Path, Path]:
+    """A mixed program on FreeRTOS: the kernel and the firmware on the RISC-V
+    side; `defines` (-D...) for the RISC-V side."""
+    return mixed_program(thumb_names, [*rv_names, *freertos_sources()], out_dir, interface,
+                         firmware=True, rv_flags=[*freertos_flags(), *defines], rv_libs=rv_libc())
+
+
 def rtos_program(out_dir: Path, defines=()) -> tuple[Path, Path]:
     """The FreeRTOS program (tests/c/rtos_main.c): two Thumb tasks from
     rtos_thumb.c beside RISC-V tasks. `defines` (-D...) set RTOS_ROUNDS,
     RTOS_PAUSE, configTICK_RATE_HZ, or THUMBV_FREERTOS_NO_NZCV."""
-    return mixed_program(["rtos_thumb.c"], ["rtos_main.c", *freertos_sources()], out_dir, "rtos.h",
-                         firmware=True, rv_flags=[*freertos_flags(), *defines], rv_libs=rv_libc())
+    return freertos_program(["rtos_thumb.c"], ["rtos_main.c"], "rtos.h", out_dir, defines)
+
+
+def demo_program(out_dir: Path, defines=()) -> tuple[Path, Path]:
+    """The board demo (tests/c/demo_main.c): the button switches between the
+    RISC-V and Cortex-M0 builds of one blinky (demo_blinky.c). `defines` set
+    DEMO_STEP, DEMO_SETTLE, DEMO_SWITCHES, configTICK_RATE_HZ."""
+    return freertos_program(["demo_blinky.c"], ["demo_main.c", "demo_blinky.c"], "demo.h", out_dir, defines)
 
 
 def coremark(out_dir: Path, iterations: int = 1) -> Path:

@@ -13,6 +13,7 @@ FPGA resource use and timing of the board design ([board.md](board.md)), one row
 | 4.2 flags unit, writers | 2026-11-01 | 5,881 (24%) | 1,450 | 50 (76%) | 8 | 33.0 MHz | + `ThumbFlagsPlugin` (NZCV, CSR `0x7C4`), the adder's carry-in, the side-band through fetch and decode, strategy C for every flag writer. Same critical path (30.3 ns) |
 | 4.3 flag readers | 2026-11-01 | 6,015 (24%) | 1,463 | 50 (76%) | 8 | 35.0 MHz | + `B<cond>` (the `BRANCH_DO` override), `ADCS`/`SBCS`, `MRS`/`MSR APSR`: all of strategy C. Same critical path (28.5 ns); the Fmax gain is the fitter's |
 | 5.2 interrupt controller | 2026-11-02 | 6,922 (28%) | 1,719 | 50 (76%) | 8 | 31.7 MHz | + `thumbv_nvic.v`: NVIC (32 interrupts, 4 levels), SysTick, SCB registers, claim/complete stack: 907 LEs, 256 registers. The critical path is still the core's (31.6 ns, code RAM → register file read address); the drop is placement |
+| 6.1 button | 2026-11-07 | 7,023 (29%) | 1,738 | 50 (76%) | 8 | 33.1 MHz | + the button register and interrupt line 1, and the board's debounce (the button no longer resets). Built with the demo program |
 
 ## 1.4 baseline
 

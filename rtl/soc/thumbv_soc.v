@@ -7,6 +7,8 @@
 //   0x1000_0000  UART data   (write: send a byte)
 //   0x1000_0004  UART status (bit 0: busy)
 //   0x1000_0008  LEDs        (bits 7:0, read/write)
+//   0x1000_0010  button      (read: bit 0 held, bit 1 pressed since cleared;
+//                write 1 to bit 1 to clear). Pressed drives interrupt line 1.
 //   0x1000_1000  interrupt controller: CLAIM (read), COMPLETE (write)
 //   0x2000_0000  data region, 64 KiB: the data RAM, DATA_WORDS words
 //   0xE000_E000  System Control Space: the interrupt controller's NVIC,
@@ -26,6 +28,7 @@ module thumbv_soc #(
     input  wire       clk,
     input  wire       reset,              // synchronous, active high
     input  wire [31:0] irq,               // interrupt lines 0-31, to the controller
+    input  wire       button,             // 1 = held; debounced and synchronised
     output wire       uart_tx,
     output reg  [7:0] leds
 );
@@ -95,10 +98,14 @@ module thumbv_soc #(
     function automatic in_io(input [31:0] a);
         in_io = a[31:4] == 28'h1000_000 && a[3:2] != 2'd3;
     endfunction
+    function automatic in_button(input [31:0] a);
+        in_button = a[31:2] == 30'h0400_0004;           // 0x1000_0010
+    endfunction
 
     wire d_code = in_code(dbus_cmd_address);
     wire d_data = in_data(dbus_cmd_address);
-    wire d_io   = in_io(dbus_cmd_address);
+    wire d_button = in_button(dbus_cmd_address);
+    wire d_io   = in_io(dbus_cmd_address) || d_button;  // responds like the other I/O
     wire d_nvic = dbus_cmd_address[31:12] == 20'hE000E || dbus_cmd_address[31:3] == 29'h0200_0200;
     wire d_read = dbus_cmd_valid && !dbus_cmd_wr;
 
@@ -138,7 +145,7 @@ module thumbv_soc #(
     // --- I/O --------------------------------------------------------------------
 
     wire uart_busy;
-    wire io_write = dbus_cmd_valid && dbus_cmd_wr && d_io;
+    wire io_write = dbus_cmd_valid && dbus_cmd_wr && in_io(dbus_cmd_address);   // UART, LEDs
 
     thumbv_uart_tx #(.CLKS_PER_BIT(UART_CLKS_PER_BIT)) uart (
         .clk   (clk),
@@ -156,6 +163,18 @@ module thumbv_soc #(
             leds <= dbus_cmd_data[7:0];
     end
 
+    // Button: a press (rising edge) sets `pressed` until software clears it.
+    reg button_q, pressed;
+    wire button_clear = dbus_cmd_valid && dbus_cmd_wr && d_button && dbus_cmd_mask[0] && dbus_cmd_data[1];
+    always @(posedge clk) begin
+        button_q <= button;
+        if (reset)
+            pressed <= 1'b0;
+        else if (button && !button_q)
+            pressed <= 1'b1;
+        else if (button_clear)
+            pressed <= 1'b0;
+    end
     // --- Interrupt controller ---------------------------------------------------
 
     wire        nvic_irq;
@@ -169,7 +188,7 @@ module thumbv_soc #(
         .bus_addr  (dbus_cmd_address),
         .bus_wdata (dbus_cmd_data),
         .bus_rdata (nvic_rdata),
-        .lines     (irq),
+        .lines     (irq | {30'b0, pressed, 1'b0}),   // line 1: the button
         .irq       (nvic_irq)
     );
 
@@ -181,7 +200,9 @@ module thumbv_soc #(
     always @(posedge clk) begin
         dbus_rsp_ready <= !reset && d_read;
         rsp_sel        <= d_code ? 3'd0 : d_data ? 3'd1 : d_io ? 3'd2 : d_nvic ? 3'd4 : 3'd3;
-        case (dbus_cmd_address[3:2])
+        if (d_button)
+            io_rdata <= {30'b0, pressed, button_q};
+        else case (dbus_cmd_address[3:2])
             2'd1:    io_rdata <= {31'b0, uart_busy};
             2'd2:    io_rdata <= {24'b0, leds};
             default: io_rdata <= 32'b0;

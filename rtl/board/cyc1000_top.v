@@ -5,8 +5,7 @@
 // so the same programs run as long as their parts don't collide; the program
 // is built into the RAMs' initial contents (CODE_INIT, DATA_INIT).
 //
-// Reset: for 1.4 s after configuration, and while the user button is held.
-// The delay is for the host: loading the FPGA resets the FT2232H, whose serial
+// Reset: for 1.4 s after configuration. The delay is for the host: loading the FPGA resets the FT2232H, whose serial
 // port then takes a moment to come back, and the program's first output would
 // be lost.
 
@@ -20,16 +19,31 @@ module cyc1000_top #(
     input  wire       UART_RX,    // from the FT2232H (BDBUS0), unused for now
     output wire [7:0] LED         // active high
 );
-    // Reset for 2^24 cycles after configuration, then the button, synchronised.
+    // Reset for 2^24 cycles after configuration.
     reg [23:0] por = 24'd0;
-    reg [1:0]  btn = 2'b00;
     reg        reset = 1'b1;
 
     always @(posedge CLK12M) begin
         if (!(&por))
             por <= por + 24'd1;
-        btn   <= {btn[0], USER_BTN};
-        reset <= !(&por) || !btn[1];
+        reset <= !(&por);
+    end
+
+    // The user button, for software (0x1000_0010, interrupt line 1):
+    // synchronised, and debounced: it changes once the pin has held its new
+    // level for 2^16 cycles (5.5 ms).
+    reg [1:0]  btn_sync = 2'b11;
+    reg [15:0] btn_count = 16'd0;
+    reg        button = 1'b0;            // 1 = held
+
+    always @(posedge CLK12M) begin
+        btn_sync <= {btn_sync[0], USER_BTN};
+        if (!btn_sync[1] == button)
+            btn_count <= 16'd0;
+        else if (&btn_count)
+            button <= !btn_sync[1];
+        else
+            btn_count <= btn_count + 16'd1;
     end
 
     thumbv_soc #(
@@ -41,7 +55,8 @@ module cyc1000_top #(
     ) soc (
         .clk     (CLK12M),
         .reset   (reset),
-        .irq       (32'b0),              // no interrupt sources on the board yet
+        .irq       (32'b0),              // the SoC's own button drives line 1
+        .button  (button),
         .uart_tx (UART_TX),
         .leds    (LED)
     );

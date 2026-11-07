@@ -20,16 +20,17 @@ flowchart LR
     classDef planned fill:#ffffff,stroke:#c77d00,stroke-dasharray:5 4,color:#7a4a00
 
     subgraph TOP["Top level: rtl/board/cyc1000_top.v on the board, sim/tb.sv in Verilator"]
-        CLK["12 MHz clock<br/>reset: 1.4 s after configuration, user button"]:::thumbv
+        CLK["12 MHz clock<br/>reset: 1.4 s after configuration"]:::thumbv
+        BTN["user button, debounced (board)<br/>+button presses (simulation)"]:::thumbv
         TBIRQ["testbench interrupt source (+irq)<br/>simulation only; tied off on the board"]:::thumbv
         subgraph SOC["SoC: rtl/soc/thumbv_soc.v"]
             CORE["Thumb-V core<br/>VexRiscv + Thumb-V plugins<br/>(next diagram)"]:::thumbv
             DEC["address decode<br/>RAMs alias through their regions"]:::thumbv
             CODE["code RAM, 0x0000_0000<br/>256 KiB sim / 32 KiB board<br/>dual port: fetch + data"]:::thumbv
             DATA["data RAM, 0x2000_0000<br/>64 KiB sim / 16 KiB board"]:::thumbv
-            IO["I/O, 0x1000_0000<br/>UART TX 115200 · LEDs"]:::thumbv
+            IO["I/O, 0x1000_0000<br/>UART TX 115200 · LEDs · button (0x1000_0010)"]:::thumbv
             NVIC["interrupt controller (D9): rtl/soc/thumbv_nvic.v<br/>NVIC, SysTick, SCB registers at 0xE000_E000<br/>CLAIM / COMPLETE at 0x1000_1000"]:::thumbv
-            SHIM["peripheral shim for ARM-only mode<br/>Phase 6"]:::planned
+            SHIM["peripheral shim for ARM-only mode<br/>not planned now"]:::planned
             SDRAM["SDRAM controller, 8 MB<br/>Phase 7"]:::planned
         end
     end
@@ -44,6 +45,8 @@ flowchart LR
     DEC -.-> SDRAM
     NVIC -- "externalInterrupt (mip.MEIP)" --> CORE
     TBIRQ -- "irq[0]: interrupt line 0" --> NVIC
+    BTN --> IO
+    IO -- "button pressed: interrupt line 1" --> NVIC
     CLK --> SOC
 ```
 
@@ -145,4 +148,5 @@ flowchart TB
 | Peripheral shim | SoC | planned | Phase 6 |
 | SDRAM controller | SoC | planned | Phase 7 |
 | SoC: RAMs, address decode, UART, LEDs | `rtl/soc/` | built | 1.2 |
+| Button register and interrupt line 1; debounce on the board; `+button` in the testbench | `rtl/soc/thumbv_soc.v`, `rtl/board/cyc1000_top.v`, `sim/tb.sv` | built | 6.1 |
 | Board top level | `rtl/board/` | built | 1.4 |

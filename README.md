@@ -24,6 +24,8 @@ make check-tools  # see what is installed
 make test         # make test-slow also runs the benchmarks in lockstep
 ```
 
+**New here?** Start with [`docs/demo.md`](docs/demo.md): the board demo, where a button switches one FreeRTOS blinky between its RISC-V and Cortex-M0 builds. It covers how the system works, what you need, and how to build, run and test it.
+
 [`docs/setup.md`](docs/setup.md) covers installation and how to run, select and add tests. All dependencies are listed in [`docs/dependencies.md`](docs/dependencies.md).
 
 ## Architecture
@@ -105,8 +107,8 @@ See [`docs/plan.md`](docs/plan.md) for details and exit criteria.
 2. Thumb region CSRs and a combinational expander for 1:1 instructions plus `B`/`BX`/`BL`; a RISC-V program calls a Thumb function. **Done.**
 3. Sequencer for multi-instruction expansions; PC-hold and interrupt-boundary patches. **Done.**
 4. Hardware flags unit (NZCV); gcc-compiled Thumb code with loops, CoreMark and Embench run on the RTL. **Done.**
-5. Unified interrupt controller and shared entry routine; real ARM libraries and an RTOS with Thumb tasks.
-6. ARM-only mode: Cortex-M exception emulation and a GPIO shim; run an unmodified Cortex-M0 blinky.
+5. Unified interrupt controller and shared entry routine; real ARM libraries and an RTOS with Thumb tasks. **Done.**
+6. A demo on the board: FreeRTOS, with the button switching one blinky between its RISC-V and Cortex-M0 builds. **Done.** (ARM-only mode, Cortex-M exception emulation for unmodified Cortex-M0 images, is not planned for now.)
 7. Performance: SDRAM, CoreMark on the board, Zbb.
 
 ## Verification

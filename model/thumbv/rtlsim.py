@@ -34,7 +34,7 @@ SOURCES = [CORE, *sorted((REPO / "rtl" / "soc").glob("*.v")), REPO / "sim" / "tb
 # The SoC's memory map, see rtl/soc/thumbv_soc.v: (base, size in bytes).
 CODE_REGION = (0x0000_0000, 0x4_0000)
 DATA_REGION = (0x2000_0000, 0x1_0000)
-IO_BASE, IO_SIZE = 0x1000_0000, 16
+IO_BASE, IO_SIZE = 0x1000_0000, 20   # UART, LEDs, the testbench's ack, the button
 # Devices, whose loads the model takes from the RTL's trace: the I/O
 # registers, the interrupt controller's CLAIM/COMPLETE and the System
 # Control Space (base, size in bytes).
@@ -203,11 +203,14 @@ class Result:
 
 
 def run(images, out_dir: Path, max_cycles: int = 10_000_000, trace: bool = True,
-        wave: Path | None = None, memories: Memories = SIM, irq: int | None = None) -> Result:
+        wave: Path | None = None, memories: Memories = SIM, irq: int | None = None,
+        button: int | None = None) -> Result:
     """Run a program on the SoC in Verilator; `wave` names an FST waveform file to write.
 
     `irq`, a seed, makes the testbench raise the timer interrupt again and
     again (sim/tb.sv); the program acknowledges each with a store to 0x1000_000C.
+    `button`, a period in cycles, presses the SoC's button for the last
+    quarter of each period.
     """
     sim = simulator(memories)
     code, data = memory_images(images, out_dir, memories)
@@ -219,6 +222,8 @@ def run(images, out_dir: Path, max_cycles: int = 10_000_000, trace: bool = True,
         args.append(f"+wave={wave}")
     if irq:
         args.append(f"+irq={irq}")
+    if button:
+        args.append(f"+button={button}")
     out = subprocess.run(args, check=True, capture_output=True, text=True).stdout
     lines = [l for l in out.splitlines(keepends=True) if not l.startswith("- ")]  # Verilator's $finish note
     status, a0, cycles, instructions = lines[-1].split()

@@ -12,6 +12,7 @@ The map matches the software model's layout ([build.py](../model/thumbv/build.py
 | `0x1000_0000` | | UART data: writing sends the low byte |
 | `0x1000_0004` | | UART status: bit 0 = busy |
 | `0x1000_0008` | | LEDs: bits 7:0, read/write |
+| `0x1000_0010` | | Button: bit 0 = held, bit 1 = pressed since last cleared (write 1 to bit 1 to clear). A press drives interrupt line 1, until cleared. On the board, the user button, debounced in `cyc1000_top.v`; in simulation, the testbench's `+button=<period>` |
 | `0x1000_1000` | | Interrupt controller: `CLAIM` (read) and `COMPLETE` (write), for software interrupt entry |
 | `0x2000_0000` | 64 KiB | Data RAM. The stack starts at the top (`0x2001_0000`). |
 | `0xE000_E000` | 4 KiB | System Control Space: the interrupt controller's NVIC, SysTick and SCB registers, as on a Cortex-M0 |
